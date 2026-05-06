@@ -41,6 +41,25 @@ export const metadata: Metadata = {
   },
   formatDetection: {
     telephone: false
+  },
+  // Custom "F" mark sourced from the official Face MD wordmark. Used for
+  // the browser tab favicon, the iOS home-screen icon (Apple Touch Icon),
+  // and the Android / PWA manifest icons.
+  icons: {
+    icon: [
+      { url: '/favicon.ico', sizes: 'any' },
+      { url: '/icons/favicon-32.png', type: 'image/png', sizes: '32x32' },
+      { url: '/icons/favicon-16.png', type: 'image/png', sizes: '16x16' }
+    ],
+    apple: [
+      { url: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }
+    ]
+  },
+  manifest: '/manifest.webmanifest',
+  appleWebApp: {
+    capable: true,
+    title: 'SimFaceMD',
+    statusBarStyle: 'black-translucent'
   }
 };
 

@@ -72,15 +72,25 @@ function useProcedures(): Procedure[] {
 /* ---------------------------------------------------------------- */
 
 function Logo({ size = 'md' }: { size?: 'sm' | 'md' | 'lg' }) {
+  // "Sim" italic word lockup + the official Clinique Face MD gold logo.
+  // The Face MD wordmark is served from /brand/face-md-logo-white.png
+  // (RGBA, 440x64, recoloured to pure white from the official
+  // cliniquefacemd.com gold lockup so the entire "Sim FACE MD" lockup
+  // reads as a single white mark on the black UI). We never alter the
+  // letterforms — only scale them.
   const sizeMap = {
-    sm: { sim: '22px', md: '11px' },
-    md: { sim: '34px', md: '14px' },
-    lg: { sim: '54px', md: '20px' }
+    sm: { sim: '24px', logoH: 18, gap: 6 },
+    md: { sim: '36px', logoH: 26, gap: 8 },
+    lg: { sim: '56px', logoH: 40, gap: 10 }
   } as const;
   const s = sizeMap[size];
 
   return (
-    <div className="flex items-baseline gap-[3px] select-none-ui">
+    <div
+      className="flex items-center select-none-ui"
+      style={{ gap: s.gap }}
+      aria-label="Sim Face MD"
+    >
       <span
         style={{
           fontFamily: "var(--font-cormorant), 'Cormorant Garamond', serif",
@@ -88,35 +98,21 @@ function Logo({ size = 'md' }: { size?: 'sm' | 'md' | 'lg' }) {
           fontWeight: 500,
           color: '#FFFFFF',
           fontSize: s.sim,
-          lineHeight: 1
+          lineHeight: 1,
+          // Optical: nudge "Sim" down so its baseline aligns with the
+          // logo wordmark cap-height instead of its own descender line.
+          transform: 'translateY(2px)'
         }}
       >
         Sim
       </span>
-      <span
-        style={{
-          fontFamily: "var(--font-cormorant), 'Cormorant Garamond', serif",
-          fontStyle: 'italic',
-          fontWeight: 500,
-          color: '#C9A84C',
-          fontSize: s.sim,
-          lineHeight: 1
-        }}
-      >
-        Face
-      </span>
-      <span
-        style={{
-          fontFamily: "var(--font-inter), Inter, system-ui, sans-serif",
-          fontWeight: 300,
-          color: 'rgba(255,255,255,0.6)',
-          fontSize: s.md,
-          letterSpacing: '0.18em',
-          marginLeft: '4px'
-        }}
-      >
-        MD
-      </span>
+      <img
+        src="/brand/face-md-logo-white.png"
+        alt=""
+        height={s.logoH}
+        style={{ height: s.logoH, width: 'auto', display: 'block' }}
+        draggable={false}
+      />
     </div>
   );
 }
@@ -1076,6 +1072,7 @@ function ResultContent({
 
       <ActionRow
         procedure={procedure}
+        beforePhoto={userPhoto}
         resultPhoto={resultPhoto}
         onReset={onReset}
       />
@@ -1581,16 +1578,229 @@ async function urlToFile(url: string, filename: string): Promise<File> {
   return new File([blob], filename, { type: blob.type || 'image/jpeg' });
 }
 
+// Loads an image as an HTMLImageElement. crossOrigin is set so canvas
+// won't be tainted when the source comes from a remote URL (the model
+// URL is currently a data URL since the API watermarks server-side, but
+// we set the flag defensively in case that ever changes).
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = (e) => reject(e);
+    img.src = src;
+  });
+}
+
+/**
+ * Build a side-by-side Before/After composite as a JPEG File suitable
+ * for download / Web Share. Both source images are normalized to the
+ * same height, then rendered into a 2-up canvas with:
+ *   • "BEFORE" / "AFTER" labels in the top-left of each panel
+ *   • a thin gold divider between panels
+ *   • a SimFACEMD lockup watermark across the bottom
+ *
+ * Output dimensions cap the smaller image's height to MAX_PANEL_H so we
+ * don't ship 8MP files. JPEG @ 0.92 keeps quality high without bloat.
+ */
+async function buildSideBySideComposite(
+  beforeUrl: string,
+  afterUrl: string,
+  filename: string,
+  labels: { before: string; after: string }
+): Promise<File> {
+  const MAX_PANEL_H = 1200; // px — each panel's render height
+  const DIVIDER_W = 4; // gold separator
+  const FOOTER_H = 110; // watermark band
+
+  // Load all assets in parallel.
+  const [beforeImg, afterImg, logoImg] = await Promise.all([
+    loadImage(beforeUrl),
+    loadImage(afterUrl),
+    loadImage('/brand/face-md-logo-white.png').catch(() => null) // graceful: missing logo → text-only watermark
+  ]);
+
+  // Match panel heights by scaling each image. Use the SHORTER of the
+  // two natural heights (capped to MAX_PANEL_H) so neither image gets
+  // upscaled beyond its source resolution.
+  const targetH = Math.min(
+    MAX_PANEL_H,
+    Math.min(beforeImg.naturalHeight, afterImg.naturalHeight)
+  );
+  const beforeScale = targetH / beforeImg.naturalHeight;
+  const afterScale = targetH / afterImg.naturalHeight;
+  const beforeW = Math.round(beforeImg.naturalWidth * beforeScale);
+  const afterW = Math.round(afterImg.naturalWidth * afterScale);
+
+  const canvasW = beforeW + DIVIDER_W + afterW;
+  const canvasH = targetH + FOOTER_H;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = canvasW;
+  canvas.height = canvasH;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas 2D context unavailable');
+
+  // 1. Black background — brand-consistent and prevents any transparent
+  //    edges from rendering as white when the JPEG encoder strips alpha.
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(0, 0, canvasW, canvasH);
+
+  // 2. Draw both panels.
+  ctx.drawImage(beforeImg, 0, 0, beforeW, targetH);
+  ctx.drawImage(afterImg, beforeW + DIVIDER_W, 0, afterW, targetH);
+
+  // 3. Gold divider between panels.
+  ctx.fillStyle = '#C9A84C';
+  ctx.fillRect(beforeW, 0, DIVIDER_W, targetH);
+
+  // 4. "BEFORE" / "AFTER" pill labels (top-left of each panel).
+  drawPanelLabel(ctx, labels.before.toUpperCase(), 24, 24, 'rgba(0,0,0,0.55)', '#FFFFFF');
+  drawPanelLabel(
+    ctx,
+    labels.after.toUpperCase(),
+    beforeW + DIVIDER_W + 24,
+    24,
+    'rgba(201,168,76,0.92)', // gold for the After label — reads as the "reveal"
+    '#000000'
+  );
+
+  // 5. Footer band: solid black with subtle top hairline + watermark.
+  const footerY = targetH;
+  ctx.fillStyle = '#0A0A0A';
+  ctx.fillRect(0, footerY, canvasW, FOOTER_H);
+  ctx.fillStyle = 'rgba(201,168,76,0.35)';
+  ctx.fillRect(0, footerY, canvasW, 1);
+
+  // 6. "Sim" italic + Face MD logo lockup, centered in the footer.
+  // Build the lockup widths first so we can center the whole group.
+  const simFontPx = 56;
+  ctx.font = `italic 500 ${simFontPx}px "Cormorant Garamond", Georgia, serif`;
+  const simText = 'Sim';
+  const simW = ctx.measureText(simText).width;
+
+  const logoTargetH = 52; // matches "Sim" cap-height nicely
+  let logoW = 0;
+  if (logoImg) {
+    logoW = (logoImg.naturalWidth / logoImg.naturalHeight) * logoTargetH;
+  }
+  const lockupGap = 14;
+  const lockupTotalW = simW + (logoImg ? lockupGap + logoW : 0);
+  const lockupX = (canvasW - lockupTotalW) / 2;
+  const lockupCenterY = footerY + FOOTER_H / 2;
+
+  // Draw "Sim" — white italic, baseline-aligned with logo.
+  ctx.fillStyle = '#FFFFFF';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(simText, lockupX, lockupCenterY + 2 /* optical nudge */);
+
+  // Draw the gold Face MD logo to the right of "Sim".
+  if (logoImg) {
+    ctx.drawImage(
+      logoImg,
+      lockupX + simW + lockupGap,
+      lockupCenterY - logoTargetH / 2,
+      logoW,
+      logoTargetH
+    );
+  } else {
+    // Fallback: render "FACE MD" as white text if the logo failed to load.
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = `300 ${simFontPx * 0.55}px Inter, system-ui, sans-serif`;
+    ctx.fillText('FACE MD', lockupX + simW + lockupGap, lockupCenterY);
+  }
+
+  // Tiny attribution under the lockup so people who screenshot the
+  // composite know where it came from.
+  ctx.fillStyle = 'rgba(255,255,255,0.45)';
+  ctx.font = '300 18px Inter, system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText('cliniquefacemd.com', canvasW / 2, footerY + FOOTER_H - 16);
+
+  // 7. Encode → Blob → File. JPEG keeps file size sane for sharing.
+  const blob: Blob = await new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (b) => (b ? resolve(b) : reject(new Error('toBlob failed'))),
+      'image/jpeg',
+      0.92
+    );
+  });
+  return new File([blob], filename, { type: 'image/jpeg' });
+}
+
+// Helper: draw a rounded "pill" label in the corner of a panel. Used
+// for the BEFORE / AFTER markers on the composite.
+function drawPanelLabel(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  bg: string,
+  fg: string
+) {
+  const padX = 18;
+  const padY = 10;
+  const fontPx = 26;
+  ctx.font = `600 ${fontPx}px Inter, system-ui, sans-serif`;
+  ctx.textBaseline = 'top';
+  ctx.textAlign = 'left';
+  const textW = ctx.measureText(text).width;
+  const w = textW + padX * 2;
+  const h = fontPx + padY * 2;
+  const r = h / 2;
+
+  // Pill background
+  ctx.fillStyle = bg;
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.arc(x + w - r, y + r, r, -Math.PI / 2, Math.PI / 2);
+  ctx.lineTo(x + r, y + h);
+  ctx.arc(x + r, y + r, r, Math.PI / 2, -Math.PI / 2);
+  ctx.closePath();
+  ctx.fill();
+
+  // Letter-spaced label
+  ctx.fillStyle = fg;
+  // Manual letter-spacing for crispness (canvas doesn't have native
+  // letter-spacing on older Safari).
+  const tracking = 2;
+  let cx = x + padX;
+  for (const ch of text) {
+    ctx.fillText(ch, cx, y + padY);
+    cx += ctx.measureText(ch).width + tracking;
+  }
+}
+
 function ActionRow({
   procedure,
+  beforePhoto,
   resultPhoto,
   onReset
 }: {
   procedure: Procedure;
+  beforePhoto: string;
   resultPhoto: string;
   onReset: () => void;
 }) {
   const { t } = useI18n();
+
+  // Build the side-by-side composite once per click. Cached on the
+  // first build so a user clicking Share → cancel → Download doesn't
+  // re-encode the canvas.
+  const compositeRef = useRef<File | null>(null);
+  const getComposite = useCallback(async (): Promise<File> => {
+    if (compositeRef.current) return compositeRef.current;
+    const file = await buildSideBySideComposite(
+      beforePhoto,
+      resultPhoto,
+      `simfacemd-${procedure.id}-before-after.jpg`,
+      { before: t('result.before'), after: t('result.after') }
+    );
+    compositeRef.current = file;
+    return file;
+  }, [beforePhoto, resultPhoto, procedure.id, t]);
   const [shareStatus, setShareStatus] = useState<string>('');
   const [busy, setBusy] = useState<null | 'share' | 'download' | 'wa' | 'ig'>(
     null
@@ -1604,7 +1814,7 @@ function ActionRow({
     procedure: procedure.name,
     url: siteUrl
   });
-  const filename = `simfacemd-${procedure.id}.jpg`;
+  const filename = `simfacemd-${procedure.id}-before-after.jpg`;
 
   const flash = (msg: string) => {
     setShareStatus(msg);
@@ -1619,7 +1829,7 @@ function ActionRow({
   const handleNativeShare = async () => {
     setBusy('share');
     try {
-      const file = await urlToFile(resultPhoto, filename);
+      const file = await getComposite();
       const shareData: ShareData = {
         title: t('share.shareTitle'),
         text: caption,
@@ -1680,7 +1890,7 @@ function ActionRow({
   const handleDownload = async () => {
     setBusy('download');
     try {
-      const file = await urlToFile(resultPhoto, filename);
+      const file = await getComposite();
       const url = URL.createObjectURL(file);
       const a = document.createElement('a');
       a.href = url;
@@ -1712,8 +1922,8 @@ function ActionRow({
           typeof (window as any).ClipboardItem !== 'undefined' &&
           navigator.clipboard?.write
         ) {
-          const resp = await fetch(resultPhoto);
-          const blob = await resp.blob();
+          const compFile = await getComposite();
+          const blob = compFile as unknown as Blob;
           const Ctor = (window as any).ClipboardItem;
           await navigator.clipboard.write([new Ctor({ [blob.type]: blob })]);
           copiedImage = true;
@@ -1739,7 +1949,7 @@ function ActionRow({
   const handleInstagram = async () => {
     setBusy('ig');
     try {
-      const file = await urlToFile(resultPhoto, filename);
+      const file = await getComposite();
       const shareData: ShareData = {
         title: t('share.shareTitle'),
         text: caption,
