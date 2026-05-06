@@ -3,10 +3,18 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties
 } from 'react';
+import {
+  CLINICS,
+  formatDistance,
+  sortClinicsByDistance,
+  type Clinic
+} from './lib/clinics';
+import { useLocation } from './lib/useLocation';
 
 /* ---------------------------------------------------------------- */
 /*  Types                                                            */
@@ -14,49 +22,72 @@ import {
 
 type Screen = 'welcome' | 'step1' | 'step2' | 'result';
 
+type ProcedureId =
+  | 'ultrasonic_rhinoplasty'
+  | 'deep_plane_facelift'
+  | 'botox'
+  | 'lip_cheek_filler'
+  | 'co2_laser'
+  | 'bbl_photofacial';
+
 type Procedure = {
-  id: 'botox' | 'lip_filler' | 'jawline_filler' | 'cheek_filler' | 'rhinoplasty';
+  id: ProcedureId;
   name: string;
   desc: string;
   cad: string;
   usd: string;
+  // What patients are paying for; shown in the price box
+  treatmentTime: string;
 };
 
 const PROCEDURES: Procedure[] = [
   {
-    id: 'botox',
-    name: 'Wrinkle Relaxer',
-    desc: "Smooth forehead, frown lines & crow's feet",
-    cad: '$120 – $1,020',
-    usd: '$89 – $756'
-  },
-  {
-    id: 'lip_filler',
-    name: 'Lip Filler',
-    desc: 'Fuller, more defined lips',
-    cad: '$450 – $700',
-    usd: '$333 – $519'
-  },
-  {
-    id: 'jawline_filler',
-    name: 'Jawline Filler',
-    desc: 'Defined jaw and chin contour',
-    cad: '$600 – $900',
-    usd: '$444 – $667'
-  },
-  {
-    id: 'cheek_filler',
-    name: 'Cheek Filler',
-    desc: 'Lifted cheekbones, refreshed midface',
-    cad: '$600 – $900',
-    usd: '$444 – $667'
-  },
-  {
-    id: 'rhinoplasty',
-    name: 'Rhinoplasty',
-    desc: 'Refine nose shape and profile',
+    id: 'ultrasonic_rhinoplasty',
+    name: 'Ultrasonic Rhinoplasty',
+    desc: 'Precision nose reshaping with piezoelectric instruments',
     cad: 'Consultation required',
-    usd: ''
+    usd: '',
+    treatmentTime: 'Surgery · 2–3 hr · Final result at 12 months'
+  },
+  {
+    id: 'deep_plane_facelift',
+    name: 'Deep Plane Facelift',
+    desc: 'Lift midface, jowls & neck as one unit',
+    cad: 'Consultation required',
+    usd: '',
+    treatmentTime: 'Surgery · 4–5 hr · Final result at 6 months'
+  },
+  {
+    id: 'botox',
+    name: 'Botox',
+    desc: "Soften forehead, frown lines & crow's feet",
+    cad: '$120 – $1,020',
+    usd: '$89 – $756',
+    treatmentTime: '15 min · Visible at 2 weeks'
+  },
+  {
+    id: 'lip_cheek_filler',
+    name: 'Lip & Cheek Filler',
+    desc: 'Fuller lips, lifted cheekbones',
+    cad: '$900 – $1,500',
+    usd: '$666 – $1,110',
+    treatmentTime: '30–45 min · Visible immediately'
+  },
+  {
+    id: 'co2_laser',
+    name: 'CO2 Laser',
+    desc: 'Smooth texture, fade lines & scarring',
+    cad: '$1,500 – $3,500',
+    usd: '$1,110 – $2,590',
+    treatmentTime: 'Single session · Final result at 3 months'
+  },
+  {
+    id: 'bbl_photofacial',
+    name: 'BBL Photofacial',
+    desc: 'Fade sun spots, redness & uneven tone',
+    cad: '$450 – $750',
+    usd: '$333 – $555',
+    treatmentTime: '30 min · 3-treatment series recommended'
   }
 ];
 
@@ -121,7 +152,7 @@ function Logo({ size = 'md' }: { size?: 'sm' | 'md' | 'lg' }) {
 export default function HomePage() {
   const [screen, setScreen] = useState<Screen>('welcome');
   const [selectedProcedure, setSelectedProcedure] =
-    useState<Procedure['id'] | null>(null);
+    useState<ProcedureId | null>(null);
   const [userPhoto, setUserPhoto] = useState<string | null>(null);
   const [resultPhoto, setResultPhoto] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -282,8 +313,8 @@ function ChooseProcedureScreen({
   onBack,
   onContinue
 }: {
-  selected: Procedure['id'] | null;
-  onSelect: (id: Procedure['id']) => void;
+  selected: ProcedureId | null;
+  onSelect: (id: ProcedureId) => void;
   onBack: () => void;
   onContinue: () => void;
 }) {
@@ -538,7 +569,8 @@ function PhotoScreen({
     [onPhotoChange]
   );
 
-  const isRhino = procedure.id === 'rhinoplasty';
+  const isRhino = procedure.id === 'ultrasonic_rhinoplasty';
+  const isFacelift = procedure.id === 'deep_plane_facelift';
 
   return (
     <section className="pt-6 pb-6 animate-fade-up flex-1 flex flex-col">
@@ -568,6 +600,14 @@ function PhotoScreen({
           style={{ color: '#C9A84C' }}
         >
           Side profile photo recommended for rhinoplasty.
+        </p>
+      )}
+      {isFacelift && (
+        <p
+          className="text-[13px] mt-1"
+          style={{ color: '#C9A84C' }}
+        >
+          A relaxed front-facing photo gives the best simulation result.
         </p>
       )}
 
@@ -951,7 +991,7 @@ function ResultContent({
 
       <PriceBox procedure={procedure} />
 
-      <ClinicCard />
+      <ClinicSection />
 
       <ActionRow procedure={procedure} resultPhoto={resultPhoto} onReset={onReset} />
 
@@ -1195,6 +1235,7 @@ function BeforeAfterSlider({
 /* ---------------------------------------------------------------- */
 
 function PriceBox({ procedure }: { procedure: Procedure }) {
+  const isConsultation = !procedure.usd && /consult/i.test(procedure.cad);
   return (
     <div
       className="mt-6"
@@ -1205,12 +1246,16 @@ function PriceBox({ procedure }: { procedure: Procedure }) {
         padding: '14px 16px'
       }}
     >
-      <p className="text-[12px] uppercase tracking-[0.16em]" style={{ color: '#C9A84C', fontWeight: 600 }}>
-        Estimated Price
+      <p
+        className="text-[12px] uppercase tracking-[0.16em]"
+        style={{ color: '#C9A84C', fontWeight: 600 }}
+      >
+        {isConsultation ? 'Estimated Investment' : 'Estimated Price'}
       </p>
       <p className="text-[15px] mt-1" style={{ color: '#FFFFFF' }}>
-        Approximately {procedure.cad}
-        {procedure.usd ? ` CAD · ${procedure.usd} USD` : ''}
+        {isConsultation
+          ? procedure.cad
+          : `Approximately ${procedure.cad}${procedure.usd ? ` CAD · ${procedure.usd} USD` : ''}`}
       </p>
       <p
         className="text-[12px] mt-2"
@@ -1222,69 +1267,208 @@ function PriceBox({ procedure }: { procedure: Procedure }) {
         className="text-[12px] mt-1"
         style={{ color: 'rgba(255,255,255,0.45)' }}
       >
-        Treatment takes 15–30 min. Results visible immediately.
+        {procedure.treatmentTime}
       </p>
     </div>
   );
 }
 
-function ClinicCard() {
+function ClinicSection() {
+  const { location, requestPreciseLocation } = useLocation();
+  const [showAll, setShowAll] = useState(false);
+  const [requestingPrecise, setRequestingPrecise] = useState(false);
+
+  const ranked = useMemo(
+    () =>
+      sortClinicsByDistance(
+        location ? { lat: location.lat, lng: location.lng } : null
+      ),
+    [location]
+  );
+
+  const nearest = ranked[0];
+  const others = ranked.slice(1);
+  const hasOthers = others.length > 0;
+
+  if (!nearest) return null;
+
+  // Banner text — only show if we successfully detected a city
+  const locationLabel = location?.city
+    ? `Showing clinics near ${location.city}${location.region ? ', ' + location.region : ''}`
+    : null;
+
+  const handleUseMyLocation = async () => {
+    setRequestingPrecise(true);
+    await requestPreciseLocation();
+    setRequestingPrecise(false);
+  };
+
+  return (
+    <div className="mt-6">
+      {locationLabel && (
+        <div
+          className="flex items-center gap-2 mb-3 text-[12px]"
+          style={{ color: 'rgba(255,255,255,0.55)' }}
+        >
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
+            <circle cx="12" cy="10" r="3" />
+          </svg>
+          <span>{locationLabel}</span>
+        </div>
+      )}
+
+      <ClinicCard
+        clinic={nearest}
+        primary
+        distanceKm={nearest.distanceKm}
+      />
+
+      {hasOthers && (
+        <div className="mt-3">
+          {!showAll ? (
+            <button
+              onClick={() => setShowAll(true)}
+              className="w-full text-[13px] py-3"
+              style={{
+                color: 'rgba(255,255,255,0.7)',
+                background: 'transparent',
+                border: '1px solid rgba(255,255,255,0.10)',
+                borderRadius: 10
+              }}
+            >
+              See {others.length} other{others.length === 1 ? '' : 's'} location
+              {others.length === 1 ? '' : 's'}
+            </button>
+          ) : (
+            <div className="space-y-3">
+              {others.map((c) => (
+                <ClinicCard
+                  key={c.id}
+                  clinic={c}
+                  distanceKm={c.distanceKm}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Offer precise location upgrade only if we don't already have GPS */}
+      {location?.source !== 'gps' && CLINICS.length > 1 && (
+        <button
+          onClick={handleUseMyLocation}
+          disabled={requestingPrecise}
+          className="w-full text-[12px] mt-3 underline"
+          style={{ color: 'rgba(255,255,255,0.45)' }}
+        >
+          {requestingPrecise
+            ? 'Locating…'
+            : 'Use my precise location for better results'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ClinicCard({
+  clinic,
+  primary,
+  distanceKm
+}: {
+  clinic: Clinic;
+  primary?: boolean;
+  distanceKm?: number;
+}) {
   return (
     <div
-      className="mt-6"
       style={{
         background: '#141414',
-        border: '1px solid rgba(255,255,255,0.10)',
+        border: primary
+          ? '1px solid rgba(201, 168, 76, 0.30)'
+          : '1px solid rgba(255,255,255,0.10)',
         borderRadius: 14,
-        padding: 20
+        padding: primary ? 20 : 16
       }}
     >
-      <div
-        style={{
-          fontFamily: "var(--font-cormorant), 'Cormorant Garamond', serif",
-          fontStyle: 'italic',
-          fontWeight: 500,
-          fontSize: 22,
-          color: '#FFFFFF',
-          lineHeight: 1.1
-        }}
-      >
-        Clinique Face MD
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1 min-w-0">
+          <div
+            style={{
+              fontFamily:
+                "var(--font-cormorant), 'Cormorant Garamond', serif",
+              fontStyle: 'italic',
+              fontWeight: 500,
+              fontSize: primary ? 22 : 19,
+              color: '#FFFFFF',
+              lineHeight: 1.1
+            }}
+          >
+            {clinic.name}
+          </div>
+          <div
+            className="text-[13px] mt-1"
+            style={{ color: 'rgba(255,255,255,0.6)' }}
+          >
+            {clinic.city}, {clinic.region}
+          </div>
+        </div>
+        {typeof distanceKm === 'number' && (
+          <div
+            className="text-[11px] uppercase tracking-[0.14em] flex-shrink-0"
+            style={{
+              color: '#C9A84C',
+              background: 'rgba(201,168,76,0.10)',
+              padding: '4px 9px',
+              borderRadius: 999,
+              fontWeight: 600
+            }}
+          >
+            {formatDistance(distanceKm)}
+          </div>
+        )}
       </div>
-      <div
-        className="text-[13px] mt-1"
-        style={{ color: 'rgba(255,255,255,0.6)' }}
-      >
-        Montréal, QC
-      </div>
+
       <div className="flex items-center gap-2 mt-2 text-[13px]">
         <span style={{ color: '#F5A623', letterSpacing: 1 }}>★★★★★</span>
-        <span style={{ color: '#FFFFFF', fontWeight: 500 }}>4.9</span>
-        <span style={{ color: 'rgba(255,255,255,0.45)' }}>· Google Reviews</span>
+        <span style={{ color: '#FFFFFF', fontWeight: 500 }}>{clinic.rating}</span>
+        <span style={{ color: 'rgba(255,255,255,0.45)' }}>
+          · {clinic.reviewSource}
+        </span>
       </div>
       <a
-        href="tel:5144479435"
+        href={`tel:${clinic.phone}`}
         className="text-[13px] mt-2 inline-block"
         style={{ color: 'rgba(255,255,255,0.7)' }}
       >
-        514-447-9435
+        {clinic.phoneDisplay}
       </a>
 
-      <div className="mt-5 space-y-2.5">
+      <div className={`mt-${primary ? 5 : 4} space-y-2.5`}>
         <button
-          className="btn-primary"
-          onClick={() => window.open('http://rdv.facemd.com/', '_blank')}
+          className={primary ? 'btn-primary' : 'btn-secondary'}
+          onClick={() => window.open(clinic.bookingUrl, '_blank')}
+          style={!primary ? { minHeight: 44, fontSize: 14 } : undefined}
         >
           Book My Consultation →
         </button>
-        <button
-          className="btn-secondary"
-          onClick={() =>
-            window.open('https://www.cliniquefacemd.com', '_blank')
-          }
-        >
-          Visit cliniquefacemd.com
-        </button>
+        {primary && (
+          <button
+            className="btn-secondary"
+            onClick={() => window.open(clinic.websiteUrl, '_blank')}
+          >
+            Visit {new URL(clinic.websiteUrl).hostname.replace('www.', '')}
+          </button>
+        )}
       </div>
     </div>
   );
