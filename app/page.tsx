@@ -8,6 +8,7 @@ import {
   useState,
   type CSSProperties
 } from 'react';
+import { flushSync } from 'react-dom';
 import {
   CLINICS,
   formatDistance,
@@ -536,6 +537,13 @@ function PhotoScreen({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // Separate input with capture="user" — used as a fallback when
+  // getUserMedia fails (e.g. iOS Chrome on certain iOS builds where
+  // it isn't allowed). This opens the OS native camera directly.
+  const cameraInputRef = useRef<HTMLInputElement | null>(null);
+  // Mirror of cameraOpen accessible inside async callbacks (setTimeout)
+  // without stale-closure issues.
+  const cameraOpenRef = useRef(false);
 
   // Detect camera support without crashing on SSR
   useEffect(() => {
@@ -549,16 +557,59 @@ function PhotoScreen({
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
+    // Detach from <video> too — prevents a frozen last-frame on retry.
+    if (videoRef.current) {
+      try {
+        videoRef.current.pause();
+      } catch {}
+      videoRef.current.srcObject = null;
+    }
   }, []);
 
   useEffect(() => {
     return () => stopCamera();
   }, [stopCamera]);
 
+  // Open the camera. CRITICAL on iOS Safari / iOS Chrome (WebKit):
+  // we MUST open the overlay AND call video.play() synchronously inside
+  // the user's tap gesture — BEFORE awaiting getUserMedia. If we wait
+  // for the permission prompt first, the user gesture token is gone
+  // by the time play() is called, play() rejects, and the preview
+  // never starts. That was the "have to cancel and retry" bug.
+  //
+  // Sequence:
+  //   1) setCameraOpen(true)        — mounts <video>
+  //   2) flush React synchronously  — so videoRef.current exists
+  //   3) video.play()               — still inside the gesture
+  //   4) await getUserMedia()       — permission prompt
+  //   5) attach stream to <video>   — picture appears
   const openCamera = useCallback(async () => {
     setCameraError(null);
+
+    // Step 1: open the overlay synchronously so React commits the
+    // <video> element to the DOM in this same tick — keeps us inside
+    // the user-gesture window. flushSync forces React 18's automatic
+    // batching to commit immediately instead of deferring to a macrotask.
+    flushSync(() => {
+      setCameraOpen(true);
+    });
+
+    const video = videoRef.current;
+    if (video) {
+      // Step 2: kick off playback IMMEDIATELY — still inside the tap
+      // gesture. iOS allows muted+playsinline play during a gesture
+      // even on a sourceless video. Once we attach srcObject below,
+      // the same <video> starts showing the camera feed without
+      // needing a fresh gesture.
+      // Don't await — awaiting a play() promise is itself a macrotask
+      // suspension and can lose the gesture on iOS WebKit.
+      video.play().catch(() => {});
+    }
+
+    // Step 4: now request camera permission.
+    let stream: MediaStream;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: 'user',
           width: { ideal: 1280 },
@@ -566,40 +617,54 @@ function PhotoScreen({
         },
         audio: false
       });
-      streamRef.current = stream;
-      // Just open the overlay. The useEffect below will wire the stream
-      // into the <video> element AFTER React commits it to the DOM, so
-      // the very first tap works on iOS Safari (no need to cancel/retry).
-      setCameraOpen(true);
     } catch (err) {
-      stopCamera();
+      // Permission denied / no camera / iOS Chrome (older) — close
+      // overlay and fall through to the native <input capture> path.
+      setCameraOpen(false);
       setHasCameraSupport(false);
-      // Per spec: don't show an error message — fall back silently to upload only
       setCameraError(null);
+      // Fire the native-camera input as a graceful fallback so the user
+      // still gets a way to take a selfie via the OS camera UI.
+      // capture="user" hint asks iOS for the front-facing camera.
+      cameraInputRef.current?.click();
+      return;
     }
-  }, [stopCamera]);
 
-  // Wire MediaStream → <video> AFTER the overlay actually mounts.
-  // Using rAF inside openCamera() raced React's commit on iOS Safari,
-  // which is why users had to cancel and retry to get the preview to
-  // attach. Here, the effect runs only when cameraOpen flips to true,
-  // by which point videoRef.current is guaranteed to exist.
-  useEffect(() => {
-    if (!cameraOpen) return;
-    const video = videoRef.current;
-    const stream = streamRef.current;
-    if (!video || !stream) return;
-    if (video.srcObject !== stream) {
-      video.srcObject = stream;
+    streamRef.current = stream;
+
+    // Step 5: attach the stream to the (already-playing) <video>.
+    if (videoRef.current) {
+      videoRef.current.srcObject = stream;
+      // Some iOS versions need an explicit play() AFTER srcObject is
+      // assigned. Ignore rejection — if step 3 succeeded we're fine.
+      videoRef.current.play().catch(() => {});
     }
-    // play() may reject on iOS if a gesture isn't active — ignore.
-    video.play().catch(() => {});
-  }, [cameraOpen]);
+
+    // Watchdog: if the <video> never starts producing frames within
+    // ~2.5s, the in-page preview isn't going to work on this browser.
+    // Tear down and silently fall back to the native camera input so
+    // the user still gets a working path to a selfie.
+    setTimeout(() => {
+      const v = videoRef.current;
+      if (!cameraOpenRef.current) return; // user already closed it
+      if (!v || v.videoWidth === 0 || v.videoHeight === 0) {
+        stopCamera();
+        setCameraOpen(false);
+        cameraInputRef.current?.click();
+      }
+    }, 2500);
+  }, [stopCamera]);
 
   const closeCamera = useCallback(() => {
     stopCamera();
     setCameraOpen(false);
+    cameraOpenRef.current = false;
   }, [stopCamera]);
+
+  // Keep cameraOpenRef in sync with state so the watchdog can read it.
+  useEffect(() => {
+    cameraOpenRef.current = cameraOpen;
+  }, [cameraOpen]);
 
   const capturePhoto = useCallback(() => {
     const video = videoRef.current;
@@ -815,6 +880,21 @@ function PhotoScreen({
               ref={fileInputRef}
               type="file"
               accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleFile(file);
+                e.target.value = '';
+              }}
+            />
+            {/* Hidden native-camera input — fallback path for browsers
+                where getUserMedia is unavailable or blocked (notably
+                some iOS Chrome builds). "capture=user" hints front cam. */}
+            <input
+              ref={cameraInputRef}
+              type="file"
+              accept="image/*"
+              capture="user"
               className="hidden"
               onChange={(e) => {
                 const file = e.target.files?.[0];
