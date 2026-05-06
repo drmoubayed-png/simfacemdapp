@@ -567,14 +567,10 @@ function PhotoScreen({
         audio: false
       });
       streamRef.current = stream;
+      // Just open the overlay. The useEffect below will wire the stream
+      // into the <video> element AFTER React commits it to the DOM, so
+      // the very first tap works on iOS Safari (no need to cancel/retry).
       setCameraOpen(true);
-      // Wait for next paint so the <video> element exists
-      requestAnimationFrame(() => {
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          videoRef.current.play().catch(() => {});
-        }
-      });
     } catch (err) {
       stopCamera();
       setHasCameraSupport(false);
@@ -582,6 +578,23 @@ function PhotoScreen({
       setCameraError(null);
     }
   }, [stopCamera]);
+
+  // Wire MediaStream → <video> AFTER the overlay actually mounts.
+  // Using rAF inside openCamera() raced React's commit on iOS Safari,
+  // which is why users had to cancel and retry to get the preview to
+  // attach. Here, the effect runs only when cameraOpen flips to true,
+  // by which point videoRef.current is guaranteed to exist.
+  useEffect(() => {
+    if (!cameraOpen) return;
+    const video = videoRef.current;
+    const stream = streamRef.current;
+    if (!video || !stream) return;
+    if (video.srcObject !== stream) {
+      video.srcObject = stream;
+    }
+    // play() may reject on iOS if a gesture isn't active — ignore.
+    video.play().catch(() => {});
+  }, [cameraOpen]);
 
   const closeCamera = useCallback(() => {
     stopCamera();
@@ -1066,16 +1079,19 @@ function ResultContent({
 
       <BeforeAfterSlider before={userPhoto} after={resultPhoto} />
 
-      <PriceBox procedure={procedure} />
-
-      <ClinicSection />
-
+      {/* Share/Download lives directly under the before/after slider so the
+          first thing the user can do after seeing their result is share it.
+          Price + clinic context follow below for anyone who keeps scrolling. */}
       <ActionRow
         procedure={procedure}
         beforePhoto={userPhoto}
         resultPhoto={resultPhoto}
         onReset={onReset}
       />
+
+      <PriceBox procedure={procedure} />
+
+      <ClinicSection />
 
       <p
         className="text-[11px] text-center leading-relaxed mt-6"
@@ -1665,7 +1681,12 @@ async function buildSideBySideComposite(
     '#000000'
   );
 
-  // 5. Footer band: solid black with subtle top hairline + watermark.
+  // 5. Diagonal repeating "Sim FACE MD" watermark across BOTH panels.
+  //    Subtle (low alpha), so the photo remains the hero, but visible
+  //    enough that anyone reposting the image can see the source.
+  drawDiagonalWatermark(ctx, 0, 0, canvasW, targetH);
+
+  // 6. Footer band: solid black with subtle top hairline + watermark.
   const footerY = targetH;
   ctx.fillStyle = '#0A0A0A';
   ctx.fillRect(0, footerY, canvasW, FOOTER_H);
@@ -1716,7 +1737,7 @@ async function buildSideBySideComposite(
   ctx.font = '300 18px Inter, system-ui, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'alphabetic';
-  ctx.fillText('cliniquefacemd.com', canvasW / 2, footerY + FOOTER_H - 16);
+  ctx.fillText('simfacemd.com', canvasW / 2, footerY + FOOTER_H - 16);
 
   // 7. Encode → Blob → File. JPEG keeps file size sane for sharing.
   const blob: Blob = await new Promise((resolve, reject) => {
@@ -1773,6 +1794,78 @@ function drawPanelLabel(
   }
 }
 
+/**
+ * Draw a real diagonal repeating "Sim FACE MD" watermark inside the
+ * given rectangle. Tiles are stamped on a rotated grid so the pattern
+ * reads as a classic stock-photo watermark, not a stamp in one corner.
+ *
+ * White text at low alpha so it sits over both light and dark skin
+ * tones without looking heavy-handed.
+ */
+function drawDiagonalWatermark(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number
+) {
+  const longEdge = Math.max(w, h);
+  const fontPx = Math.round(longEdge * 0.038);
+  const wordW = fontPx * 6.2; // approx width of "Sim FACE MD" lockup
+  const stepX = Math.round(wordW * 1.55);
+  const stepY = Math.round(fontPx * 6.0);
+  const angleRad = (-22 * Math.PI) / 180;
+
+  ctx.save();
+  // Clip to the panel rect so the watermark never bleeds into the
+  // footer band or outside the canvas.
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+
+  // Rotate around the rect's center.
+  const cx = x + w / 2;
+  const cy = y + h / 2;
+  ctx.translate(cx, cy);
+  ctx.rotate(angleRad);
+  ctx.translate(-cx, -cy);
+
+  ctx.globalAlpha = 0.22; // overall watermark opacity
+  ctx.fillStyle = '#FFFFFF';
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+
+  // Over-extend the grid so the rotated pattern fills every corner.
+  const overscan = Math.round(longEdge * 0.6);
+  const x0 = x - overscan;
+  const x1 = x + w + overscan;
+  const y0 = y - overscan;
+  const y1 = y + h + overscan;
+
+  for (let py = y0; py < y1; py += stepY) {
+    const rowIdx = Math.floor((py - y0) / stepY);
+    const rowOffset = (rowIdx % 2) * Math.round(stepX / 2);
+    for (let px = x0 + rowOffset; px < x1; px += stepX) {
+      // "Sim" italic Cormorant
+      ctx.font = `italic 500 ${fontPx}px "Cormorant Garamond", Georgia, serif`;
+      ctx.fillText('Sim', px, py);
+      const simW = ctx.measureText('Sim').width;
+      // "FACE MD" in spaced sans, slightly smaller so it tracks the lockup
+      const sansPx = Math.round(fontPx * 0.78);
+      ctx.font = `300 ${sansPx}px Inter, system-ui, sans-serif`;
+      // Manual letter-spacing for canvas Safari compat.
+      let lx = px + simW + Math.round(fontPx * 0.35);
+      const tracking = Math.round(sansPx * 0.22);
+      for (const ch of 'FACE MD') {
+        ctx.fillText(ch, lx, py);
+        lx += ctx.measureText(ch).width + tracking;
+      }
+    }
+  }
+
+  ctx.restore();
+}
+
 function ActionRow({
   procedure,
   beforePhoto,
@@ -1809,7 +1902,7 @@ function ActionRow({
   // Pre-filled caption — every share doubles as a free ad. Keep it short
   // enough that it survives Instagram / WhatsApp / iMessage paste limits.
   const siteUrl =
-    typeof window !== 'undefined' ? window.location.origin : 'https://cliniquefacemd.com';
+    typeof window !== 'undefined' ? window.location.origin : 'https://simfacemd.com';
   const caption = t('share.captionTemplate', {
     procedure: procedure.name,
     url: siteUrl

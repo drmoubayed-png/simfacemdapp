@@ -261,10 +261,15 @@ export async function POST(req: NextRequest) {
 }
 
 /**
- * Bake a subtle SimFaceMD by Face MD watermark into the bottom-right of
- * the result JPEG and return it as a data URL. We use Sharp + an SVG
- * overlay so the watermark scales relative to the image dimensions and
- * matches the brand (Cormorant Garamond italic + gold #C9A84C).
+ * Bake a real diagonal repeating "Sim FACE MD" watermark across the
+ * entire result JPEG. This replaces the old bottom-right boxy overlay
+ * (which rendered as a translucent square with fallback glyphs because
+ * Sharp's SVG renderer doesn't have access to Cormorant Garamond).
+ *
+ * Implementation: we generate ONE big SVG the size of the source image
+ * and stamp the wordmark repeatedly onto it on a rotated grid, then
+ * composite that single overlay. This avoids Sharp's "no negative
+ * offsets" rule for composite tiles.
  */
 async function applyWatermark(imageUrl: string): Promise<string> {
   const imgResp = await fetch(imageUrl);
@@ -277,46 +282,59 @@ async function applyWatermark(imageUrl: string): Promise<string> {
   const W = meta.width || 1024;
   const H = meta.height || 1024;
 
-  // Watermark dims scale with image; cap to keep readable on small previews
-  const wmW = Math.round(Math.min(W * 0.36, 360));
-  const wmH = Math.round(wmW * 0.22);
+  // Wordmark size scales with the image. Aim for ~30% of the long edge
+  // so the mark is legible on a phone but doesn't dominate the face.
+  const longEdge = Math.max(W, H);
+  const wordW = Math.round(longEdge * 0.34);
+  const fontPx = Math.round(wordW * 0.135);
 
-  // "Sim" in white italic + "Face" in gold italic + small "MD" lockup,
-  // matching the in-app logo. Then a small "by Clinique Face MD" line
-  // beneath. SVG escapes minimal — these literal strings are safe.
-  const fontSize = Math.round(wmH * 0.46);
-  const subFontSize = Math.round(wmH * 0.18);
-  const padX = Math.round(wmH * 0.20);
-  const padY = Math.round(wmH * 0.18);
+  // Diagonal grid spacing in image space (BEFORE rotation).
+  const stepX = Math.round(wordW * 1.55);
+  const stepY = Math.round(fontPx * 6.0);
+  const angleDeg = -22;
 
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="${wmW}" height="${wmH}" viewBox="0 0 ${wmW} ${wmH}">
+  // Build the stamp SVG — one "Sim FACE MD" wordmark, transparent bg.
+  // Each stamp is reused via SVG <use> for compactness.
+  const stampW = Math.round(wordW);
+  const stampH = Math.round(fontPx * 1.4);
+
+  // Build stamps positioned across the canvas. We over-extend the grid
+  // so rotation doesn't expose unwatermarked corners.
+  const overscan = Math.round(longEdge * 0.6);
+  const stamps: string[] = [];
+  for (let y = -overscan; y < H + overscan; y += stepY) {
+    const rowIdx = Math.floor((y + overscan) / stepY);
+    const rowOffset = (rowIdx % 2) * Math.round(stepX / 2);
+    for (let x = -overscan + rowOffset; x < W + overscan; x += stepX) {
+      stamps.push(`<use href="#wm" x="${x}" y="${y}"/>`);
+    }
+  }
+
+  // Use generic fonts (Georgia italic + Helvetica) since Sharp's SVG
+  // renderer doesn\'t have Cormorant. White text at 0.28 opacity.
+  const overlaySvg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
       <defs>
-        <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-          <feGaussianBlur in="SourceAlpha" stdDeviation="2"/>
-          <feOffset dx="0" dy="1" result="o"/>
-          <feComponentTransfer><feFuncA type="linear" slope="0.55"/></feComponentTransfer>
-          <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
-        </filter>
+        <g id="wm" fill="#FFFFFF" fill-opacity="0.28">
+          <text x="0" y="${Math.round(fontPx * 0.95)}"
+                font-family="Georgia, 'Times New Roman', serif"
+                font-style="italic" font-weight="500"
+                font-size="${fontPx}">Sim</text>
+          <text x="${Math.round(fontPx * 1.65)}" y="${Math.round(fontPx * 0.95)}"
+                font-family="Helvetica, Arial, sans-serif"
+                font-weight="300" letter-spacing="${Math.round(fontPx * 0.18)}"
+                font-size="${Math.round(fontPx * 0.78)}">FACE MD</text>
+        </g>
       </defs>
-      <rect x="0" y="0" width="${wmW}" height="${wmH}" fill="#000000" fill-opacity="0.42" rx="${Math.round(wmH * 0.18)}"/>
-      <g filter="url(#shadow)" font-family="Cormorant Garamond, Georgia, serif" font-style="italic" font-weight="500">
-        <text x="${padX}" y="${padY + fontSize * 0.85}" font-size="${fontSize}" fill="#FFFFFF">Sim</text>
-        <text x="${padX + fontSize * 1.55}" y="${padY + fontSize * 0.85}" font-size="${fontSize}" fill="#C9A84C">Face</text>
-        <text x="${padX + fontSize * 1.55 + fontSize * 2.1}" y="${padY + fontSize * 0.6}" font-size="${Math.round(fontSize * 0.42)}" fill="rgba(255,255,255,0.75)" font-style="normal" font-family="Inter, system-ui, sans-serif" letter-spacing="2">MD</text>
-        <text x="${padX}" y="${padY + fontSize * 0.85 + subFontSize * 1.5}" font-size="${subFontSize}" fill="rgba(255,255,255,0.78)" font-style="normal" font-family="Inter, system-ui, sans-serif" letter-spacing="1">by Clinique Face MD</text>
+      <g transform="rotate(${angleDeg} ${W / 2} ${H / 2})">
+        ${stamps.join('\n        ')}
       </g>
     </svg>`;
 
-  const wmBuf = await sharp(Buffer.from(svg)).png().toBuffer();
-
-  // Place 24px from bottom-right (or 2.5% of width, whichever is larger).
-  const margin = Math.max(24, Math.round(W * 0.025));
-  const left = Math.max(0, W - wmW - margin);
-  const top = Math.max(0, H - wmH - margin);
+  const overlayBuf = await sharp(Buffer.from(overlaySvg)).png().toBuffer();
 
   const out = await sharp(imgBuf)
-    .composite([{ input: wmBuf, left, top }])
+    .composite([{ input: overlayBuf, left: 0, top: 0 }])
     .jpeg({ quality: 92, progressive: true })
     .toBuffer();
 

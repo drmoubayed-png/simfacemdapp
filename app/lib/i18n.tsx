@@ -125,7 +125,7 @@ const DICT = {
   'result.cadSuffix': { en: 'CAD', fr: '$ CA' }, // e.g. "Starting at $400 CAD" / "À partir de 400 $ CA"
   'result.sourcePublished': {
     en: 'Source: cliniquefacemd.com/prices. Final quote at your free consultation. Taxes excluded.',
-    fr: 'Source : cliniquefacemd.com/prices. Devis final lors de votre consultation gratuite. Taxes en sus.'
+    fr: 'Source : cliniquefacemd.com/prices. Devis final lors de votre consultation gratuite. Taxes en sus.'
   },
   'result.sourceMontreal': {
     en: 'Montreal starting price. Final quote at your free consultation. Taxes excluded.',

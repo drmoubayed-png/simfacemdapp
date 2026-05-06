@@ -19,6 +19,10 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
+  // Set so any relative URLs in og/twitter metadata resolve to the
+  // production domain instead of localhost. Update if the canonical
+  // host ever changes.
+  metadataBase: new URL('https://www.simfacemd.com'),
   title: 'SimFaceMD — See it before you do it.',
   description:
     'AI-powered aesthetic simulation by Clinique Face MD, Montréal. Free 60-second preview of botox, lip filler, jawline filler, cheek filler & rhinoplasty.',
@@ -37,7 +41,15 @@ export const metadata: Metadata = {
     title: 'SimFaceMD — See it before you do it.',
     description:
       'AI-powered aesthetic simulation. Free. 60 seconds. Clinique Face MD, Montréal.',
+    url: 'https://www.simfacemd.com',
+    siteName: 'SimFaceMD',
     type: 'website'
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'SimFaceMD — See it before you do it.',
+    description:
+      'AI-powered aesthetic simulation. Free. 60 seconds. Clinique Face MD, Montréal.'
   },
   formatDetection: {
     telephone: false
