@@ -235,12 +235,24 @@ function WelcomeScreen({ onStart }: { onStart: () => void }) {
 
   return (
     <section className="flex-1 flex flex-col min-h-[100dvh] py-12 animate-fade-up">
-      <div className="pt-2 flex items-center justify-between">
+      {/* Header row — elevated above the centered hero so the language
+          toggle stays clickable. The hero's negative margin used to pull
+          UP and intercept pointer events on the toggle (caught in v4.3
+          QA: the FR pill silently did nothing). Fix: give the header
+          row position:relative + z-index, and keep pointer events off
+          the centered text block (text doesn't need clicks). */}
+      <div
+        className="pt-2 flex items-center justify-between"
+        style={{ position: 'relative', zIndex: 2 }}
+      >
         <Logo size="md" />
         <LanguageToggle />
       </div>
 
-      <div className="flex-1 flex flex-col justify-center text-center -mt-6">
+      <div
+        className="flex-1 flex flex-col justify-center text-center -mt-6"
+        style={{ pointerEvents: 'none' }}
+      >
         <h1
           style={{
             fontFamily: "var(--font-cormorant), 'Cormorant Garamond', serif",
@@ -1599,8 +1611,11 @@ function ActionRow({
     setTimeout(() => setShareStatus(''), 2200);
   };
 
-  // ——— Native share (image + caption). Falls through to copy-link if
-  // the platform / browser doesn't support sharing files.
+  // ——— Native share (image + caption). Always provides feedback so
+  // desktop users without navigator.share don't think the button is broken.
+  // Mobile path: OS share sheet with the watermarked JPEG attached.
+  // Desktop path: copy caption to clipboard AND auto-download the image
+  // so the user has both pieces ready to paste somewhere.
   const handleNativeShare = async () => {
     setBusy('share');
     try {
@@ -1615,15 +1630,41 @@ function ActionRow({
         typeof navigator.canShare === 'function' && navigator.canShare(shareData);
       if (navigator.share && canShareFiles) {
         await navigator.share(shareData);
+        // Native share sheet handled the rest — no extra flash needed
+        // (would step on the share sheet UX).
       } else if (navigator.share) {
         // Browser supports share but not files — fall back to text+url.
         await navigator.share({
           title: t('share.shareTitle'),
           text: caption
         });
-      } else if (navigator.clipboard) {
-        await navigator.clipboard.writeText(caption);
-        flash(t('share.captionCopied'));
+      } else {
+        // Desktop fallback. Most desktop browsers don't expose
+        // navigator.share at all — silently doing nothing here was the
+        // "share doesn't work" bug. Copy caption + download image.
+        let copied = false;
+        try {
+          if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(caption);
+            copied = true;
+          }
+        } catch {
+          /* clipboard may be blocked — fall through to download */
+        }
+        // Always download the image so the user has something tangible.
+        try {
+          const url = URL.createObjectURL(file);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 1500);
+        } catch {
+          /* swallow — we'll still flash a status below */
+        }
+        flash(copied ? t('share.captionCopied') : t('share.savedToDevice'));
       }
     } catch (e: any) {
       // AbortError = user dismissed share sheet — silent.
