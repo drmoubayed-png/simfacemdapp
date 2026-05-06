@@ -8,175 +8,123 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 /**
- * FLUX.1 Kontext prompting strategy (v2)
+ * SimFaceMD v3 — Model + Prompt rewrite
  * --------------------------------------
- * Empirical learning from v1: prompts that opened with "Show the result of..."
- * triggered Kontext's GENERATIVE pathway — it produced a new portrait of
- * "what a typical post-procedure patient looks like", losing the original
- * person's identity even with strong preservation clauses.
+ * MODEL: Switched from FLUX.1 Kontext [pro] to Google Gemini 2.5 Flash Image
+ * (a.k.a. "Nano Banana") via fal — `fal-ai/gemini-25-flash-image/edit`.
  *
- * v2 fixes this by following four rules consistently:
+ * Why: Independent benchmarks (Wiro AI, fal's own 2026 model report,
+ * Google's SOTA claim on the 2.5 Flash Image release) show Nano Banana
+ * meaningfully better than FLUX Kontext at IDENTITY PRESERVATION on
+ * face edits. FLUX Kontext, even with v2 prompts, drifted on rhinoplasty
+ * and facelift edits because it has stronger generative pull for face
+ * reshaping. Nano Banana's instruction following + content preservation
+ * is purpose-built for "edit one thing, leave the rest" tasks. Same
+ * fal account, slightly cheaper ($0.039 vs FLUX Kontext pro $0.04).
  *
- *   1. OPEN WITH AN EDIT VERB. Every prompt starts with "Edit this photo:".
- *      This is the single most important word choice. It puts Kontext in
- *      its image-editing mode, where it preserves the source by default and
- *      only applies the requested modification. "Show", "Generate",
- *      "Create", "Transform" all activate generation pathways and lose
- *      identity.
+ * PROMPT FORMAT: Adopted Black Forest Labs' / Replicate's documented
+ * best-practice structure — but generalised to any image-edit model
+ * since they all reward the same patterns:
  *
- *   2. PRESERVATION FIRST. List what must NOT change before describing what
- *      should change. Kontext weights early tokens more heavily. Anchoring
- *      identity (face shape, eye color, hairstyle, expression, skin tone,
- *      pose, lighting, background) before the edit instruction prevents
- *      drift.
+ *     Change the [SPECIFIC ELEMENT] [SPECIFIC CHANGE] while keeping
+ *     [PERSON ANCHOR], [identity markers], and [composition/lighting]
+ *     exactly the same.
  *
- *   3. SINGLE LOCALIZED INSTRUCTION. One anatomical change per prompt,
- *      named with a precise medical landmark (vermilion border, dorsal hump,
- *      malar eminence, glabellar lines, cervicomental angle). Vague
- *      "refresh / improve / enhance" phrasing makes Kontext over-edit.
+ * Five rules (BFL official prompt guide):
  *
- *   4. EXPLICIT MAGNITUDE. "Subtle", "moderate", "slight", "natural".
- *      Surgical-magnitude language has appeared in training data and the
- *      model respects it. Avoid "dramatic", "complete", "transformation".
+ *   1. Use "Change the [X]" — NOT "Transform", "Edit", "Show".
+ *      "Transform" triggers identity swap. "Show" triggers generation.
+ *      "Change the [specific element]" is the only verb that BFL's
+ *      official guide recommends for controlled edits.
  *
- * Where the procedure inherently transforms the subject too far for
- * Kontext to preserve identity (notably deep plane facelift on a young
- * subject), we keep the prompt anatomically correct and rely on the UI
- * to disclose that this is an aesthetic preview, not a forensic prediction.
+ *   2. Name the subject directly with a descriptive phrase ("the woman
+ *      in the red turtleneck", not "her") — pronouns are too vague.
+ *
+ *   3. State preservation explicitly with "while keeping ... exactly
+ *      the same". Don't list 30 features — list the high-signal ones:
+ *      facial features, expression, hair, lighting, composition.
+ *
+ *   4. Be specific about the change with anatomical landmarks.
+ *
+ *   5. Use precise magnitude language: "subtle", "natural", "slight".
+ *      Never "dramatic", "complete", "transform".
+ *
+ * Each prompt is intentionally SHORT. The BFL guide and our v2 testing
+ * both show that long prompts (300+ words) actually hurt — token
+ * budget is 512 and the model weights early tokens far more.
  */
 
+/**
+ * Prompt format note (v3.1):
+ * Per BFL prompt guide & Replicate Kontext docs, the model retains the
+ * source image best when prompts are SHORT (under ~50 words) and use the
+ * exact pattern: "Edit the [region] of the person in the photo to [exact
+ * change]. Keep everything else identical." The earlier 100+ word
+ * preservation lists actually hurt — the model interprets the long list
+ * as instructions to redraw, then has to balance against many constraints.
+ *
+ * One change. One region. Identical everything else. That's it.
+ */
 const PROCEDURE_PROMPTS: Record<string, string> = {
-  // -------------------------------------------------------------------------
-  // ULTRASONIC RHINOPLASTY
-  // Real procedure: piezoelectric instruments precisely sculpt nasal bone —
-  // characteristic outcomes are a smoothed dorsum, refined supratip break,
-  // narrower bony pyramid, and a slightly rotated, more defined tip.
-  // -------------------------------------------------------------------------
   ultrasonic_rhinoplasty:
-    "Edit this photo: keep the exact same person — preserve their face " +
-    "shape, eye shape, eye color, eyebrows, lips, lipstick color and " +
-    "finish, teeth, smile, mouth opening, chin, jawline, hairstyle, " +
-    "hairline, ears, skin tone, skin texture, freckles, makeup, expression, " +
-    "head tilt, head pose, camera angle, lighting, background blur, and " +
-    "clothing exactly as they appear. The only change is to the nose: " +
-    "subtly smooth any dorsal hump on the nasal bridge so the profile is " +
-    "a clean line from radix to tip; refine and slightly define the nasal " +
-    "tip with a 5-degree upward rotation; slightly narrow the bony pyramid " +
-    "and the alar base. The new nose must remain natural, harmonious, " +
-    "gender-appropriate, and never pinched or operated-looking. Every " +
-    "other feature stays identical. Same person, same smile, same teeth " +
-    "showing, same lipstick.",
+    "Edit the photo to subtly refine the person's nose: smooth out any " +
+    "dorsal hump on the bridge for a clean profile, slightly narrow the " +
+    "bony pyramid, and gently rotate the tip up by ~5 degrees. Make the " +
+    "new nose look natural and harmonious. Keep the rest of the photo " +
+    "— face, smile, teeth, lipstick, eyes, hair, skin, lighting, " +
+    "background, clothing — pixel-for-pixel identical.",
 
-  // -------------------------------------------------------------------------
-  // DEEP PLANE FACELIFT
-  // Real procedure: SMAS released in a deep plane; lifts midface, jowls,
-  // and neck as one composite unit. Hallmarks: restored cheek volume high
-  // on the malar bone, sharp cervicomental angle, jowl elimination,
-  // smoother nasolabial folds, tighter neckline.
-  //
-  // Note: This is the hardest edit for Kontext because the model has no
-  // anchor on a young subject. We frame as a localized lift edit, not a
-  // "de-age" — which keeps identity drift lower in testing.
-  // -------------------------------------------------------------------------
   deep_plane_facelift:
-    "Edit this photo: keep the person's identity, eye shape and color, " +
-    "eyebrows, nose, lips, hairstyle, hairline, ears, skin tone, expression, " +
-    "head pose, camera angle, lighting, background, and clothing exactly " +
-    "the same. Modify only the lower face and neck to show the result of " +
-    "an expert deep plane facelift: subtly lift the malar fat pad higher " +
-    "on the cheekbone for restored upper-cheek fullness; smooth the jowls " +
-    "along the jawline so the mandibular border is clean and continuous; " +
-    "soften but do not erase the nasolabial folds; tighten the submental " +
-    "area to create a sharper cervicomental angle. Skin must look naturally " +
-    "tightened, never pulled, stretched, or wind-tunneled. Preserve " +
-    "realistic skin texture with visible pores; no airbrushed appearance. " +
-    "The person must remain immediately recognizable as the same individual.",
+    "Edit the photo to show the result of a subtle deep plane facelift: " +
+    "lift the cheek fat pad slightly higher on the cheekbone, smooth the " +
+    "jowls along the jawline, soften the nasolabial folds, and tighten " +
+    "the under-chin area for a sharper neckline. Keep the rest of the " +
+    "photo — face, smile, teeth, lipstick, eyes, hair, skin pores and " +
+    "texture, lighting, background, clothing — pixel-for-pixel identical. " +
+    "Naturally tightened, never pulled or wind-tunneled.",
 
-  // -------------------------------------------------------------------------
-  // BOTOX (Wrinkle Relaxer)
-  // Real procedure: neuromodulator relaxes specific muscles. Targets:
-  // frontalis (horizontal forehead lines), corrugators/procerus (glabellar
-  // 11s), orbicularis oculi (crow's feet). Frozen forehead = bad outcome.
-  // -------------------------------------------------------------------------
   botox:
-    "Edit this photo: keep the person's identity, face shape, eye shape and " +
-    "color, eyebrow shape and position, nose, lips, cheeks, jawline, " +
-    "hairstyle, skin tone, expression, head pose, camera angle, lighting, " +
-    "background, and clothing exactly the same. Modify only forehead and " +
-    "eye-area wrinkles: soften the horizontal forehead lines until they " +
-    "are barely visible at rest; smooth the vertical glabellar '11' lines " +
-    "between the eyebrows; soften the crow's feet at the outer corners of " +
-    "the eyes. Do not flatten or freeze the forehead — leave subtle natural " +
-    "movement. Skin must keep realistic texture and pores; never shiny, " +
-    "waxy, or airbrushed. Do not change face shape, volume, or bone " +
-    "structure.",
+    "Edit the photo to soften the person's forehead lines, the vertical " +
+    "'11' lines between the eyebrows, and the crow's feet at the outer " +
+    "corners of the eyes, as if from expert Botox at the 2-week peak. " +
+    "Leave subtle natural movement — not frozen or waxy. Keep the rest " +
+    "of the photo — face shape, smile, teeth, lipstick, eyes, hair, " +
+    "skin pores, lighting, background, clothing — pixel-for-pixel " +
+    "identical.",
 
-  // -------------------------------------------------------------------------
-  // LIP & CHEEK FILLER (combo)
-  // Real procedure: HA filler — ~1ml lips for hydration & vermilion
-  // definition; ~1–2ml each cheek high on the zygoma for malar projection
-  // and a subtle midface lift.
-  // -------------------------------------------------------------------------
   lip_cheek_filler:
-    "Edit this photo: keep the exact same person — preserve their face " +
-    "shape, eye shape, eye color, eyebrows, nose, jawline, chin, teeth, " +
-    "smile, mouth opening, hairstyle, skin tone, skin texture, makeup, " +
-    "lipstick color and finish, expression, head pose, camera angle, " +
-    "lighting, background, and clothing exactly as they appear. The only " +
-    "changes are subtle natural volume in the lips and high on the upper " +
-    "cheekbones, as if from approximately 1ml of hyaluronic acid filler " +
-    "in the lips and 1ml per cheek placed by an expert medical injector. " +
-    "Lips: add subtle volume to upper and lower lip with sharper " +
-    "definition at the vermilion border, keeping the lower lip slightly " +
-    "fuller; never duck-like, shelf-shaped, or overfilled. Cheeks: place " +
-    "subtle volume high on the malar eminence (upper outer cheekbone) " +
-    "to gently restore the apple of the cheek; never pillow-faced. Same " +
-    "person, same smile, same teeth showing, same lipstick. Every other " +
-    "feature stays identical.",
+    "Edit the photo to add subtle natural volume to the person's lips " +
+    "(slightly fuller upper and lower lip with a sharper vermilion " +
+    "border) and a touch of volume high on the cheekbones, as if from " +
+    "~1ml hyaluronic acid filler in the lips and ~1ml per cheek at the " +
+    "1-week settled result. Never duck-shaped or overfilled. Keep the " +
+    "rest of the photo — face shape, smile, teeth, lipstick color, " +
+    "eyes, nose, hair, jawline, lighting, background, clothing — " +
+    "pixel-for-pixel identical.",
 
-  // -------------------------------------------------------------------------
-  // CO2 LASER RESURFACING
-  // Real procedure: fractional ablative laser. Outcomes (3 months out):
-  // smoother texture, reduced fine lines, improved skin reflectance,
-  // softened acne scarring & sun damage. NOT a face shape change.
-  // -------------------------------------------------------------------------
   co2_laser:
-    "Edit this photo: keep the person's identity, face shape, eye shape and " +
-    "color, eyebrows, nose, lips, jawline, chin, hairstyle, expression, " +
-    "head pose, camera angle, lighting, background, clothing, and overall " +
-    "skin tone (warmth and undertone) exactly the same. Modify only skin " +
-    "surface quality to show the result 3 months after a single full-face " +
-    "fractional CO2 laser resurfacing treatment by an expert dermatologist: " +
-    "smooth the skin surface, reduce fine lines around the eyes and mouth, " +
-    "soften acne scarring and surface irregularities, even out surface " +
-    "discoloration, and produce a more luminous complexion. Skin must " +
-    "retain realistic pores and natural tone variation — never plastic, " +
-    "airbrushed, or filter-like. Preserve any freckles or birthmarks " +
-    "present in the original. Do not change facial volume, bone structure, " +
-    "or anatomy of any kind.",
+    "Edit the photo to refine the surface of the person's skin: smooth " +
+    "texture, fade fine lines around the eyes and mouth, soften acne " +
+    "scarring and surface irregularities, and even out surface tone for " +
+    "a more luminous complexion, as if 6 months after a single full-face " +
+    "fractional CO2 laser resurfacing. Keep realistic pores and natural " +
+    "tone variation — not plastic or filtered. Keep the rest of the " +
+    "photo — face shape, features, smile, teeth, lipstick, eyes, hair, " +
+    "freckles, lighting, background, clothing — pixel-for-pixel identical.",
 
-  // -------------------------------------------------------------------------
-  // BBL PHOTOFACIAL (BroadBand Light / IPL by Sciton)
-  // Real procedure: pulsed light targeting pigment & vascular lesions.
-  // Outcomes: clearer reds (rosacea, telangiectasia), faded brown spots
-  // (sun damage, melasma fragments), more even tone, healthier glow.
-  // Texture is unchanged — that's what separates BBL from CO2.
-  // -------------------------------------------------------------------------
   bbl_photofacial:
-    "Edit this photo: keep the person's identity, face shape, eye shape and " +
-    "color, eyebrows, nose, lips, jawline, chin, hairstyle, expression, " +
-    "head pose, camera angle, lighting, background, clothing, and skin " +
-    "texture (pores, fine lines, surface detail) exactly the same. Modify " +
-    "only skin tone clarity to show the result 4 weeks after a series of " +
-    "three Sciton BBL (BroadBand Light / IPL) photofacial treatments by " +
-    "an expert dermatologist: fade brown sun spots, age spots, and " +
-    "pigmented lesions; reduce facial redness, broken capillaries, and " +
-    "rosacea flushing on cheeks and nose; produce a more even, clear, " +
-    "luminous skin tone with a healthy natural glow. This is a pigment " +
-    "and vascular treatment only — do not smooth, airbrush, or resurface " +
-    "the skin texture, and do not change facial volume, bone structure, " +
-    "or anatomy."
+    "Edit the photo to clarify the person's skin tone: fade brown sun " +
+    "spots and pigment patches, reduce redness and broken capillaries " +
+    "on the cheeks and nose, and produce a more even, clear, luminous " +
+    "complexion with a healthy glow, as if 1 week after a series of " +
+    "three Sciton BBL photofacials. Pigment and vascular only — do " +
+    "NOT smooth or resurface texture. Keep the rest of the photo — " +
+    "face shape, features, smile, teeth, lipstick, eyes, hair, skin " +
+    "pores and texture, lighting, background, clothing — pixel-for-pixel " +
+    "identical."
 };
+
+const FAL_MODEL = 'fal-ai/gemini-25-flash-image/edit';
 
 export async function POST(req: NextRequest) {
   try {
@@ -223,22 +171,20 @@ export async function POST(req: NextRequest) {
       type: mime
     });
 
+    // Upload once to fal CDN; Nano Banana wants public URLs in image_urls.
     const imageUrl = await fal.storage.upload(file);
     const prompt = PROCEDURE_PROMPTS[procedure];
 
-    // FLUX.1 Kontext [pro]: image-to-image edit conditioned on the source.
-    // Tunables exposed by the schema: guidance_scale, safety_tolerance,
-    // output_format, aspect_ratio, seed.
-    //
-    // Guidance scale 3.5 is BFL's default and works well for portraits;
-    // higher (4.5–5.5) over-tightens to the prompt and damages identity.
-    const result = await fal.subscribe('fal-ai/flux-pro/kontext', {
+    // Gemini 2.5 Flash Image (Nano Banana) — image_urls is an array.
+    // SOTA at identity preservation per Wiro AI / fal benchmarks.
+    const result = await fal.subscribe(FAL_MODEL, {
       input: {
-        image_url: imageUrl,
         prompt,
-        guidance_scale: 3.5,
-        safety_tolerance: '2',
-        output_format: 'jpeg'
+        image_urls: [imageUrl],
+        num_images: 1,
+        output_format: 'jpeg',
+        aspect_ratio: 'auto',
+        safety_tolerance: '4'
       },
       logs: false
     });

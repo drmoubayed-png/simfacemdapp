@@ -40,54 +40,63 @@ type Procedure = {
   treatmentTime: string;
 };
 
+// Pricing sourced from cliniquefacemd.com/prices (CAD, taxes excluded).
+// Where Face MD does not list a per-procedure price (Botox, lip filler,
+// cheek filler) we mark as "Consultation" rather than invent numbers.
+// Final-result timelines per Dr. Moubayed's clinical guidance:
+//   surgery        → 1 year (12 months)
+//   botox peak     → 2 weeks
+//   filler final   → 1 week
+//   CO2 final      → 6 months
+//   BBL optimal    → 1 week
 const PROCEDURES: Procedure[] = [
   {
     id: 'ultrasonic_rhinoplasty',
     name: 'Ultrasonic Rhinoplasty',
     desc: 'Precision nose reshaping with piezoelectric instruments',
-    cad: 'Consultation required',
+    cad: '$11,900 – $14,700',
     usd: '',
-    treatmentTime: 'Surgery · 2–3 hr · Final result at 12 months'
+    treatmentTime: 'Surgery · 2–3 hr · Final result at 1 year'
   },
   {
     id: 'deep_plane_facelift',
     name: 'Deep Plane Facelift',
     desc: 'Lift midface, jowls & neck as one unit',
-    cad: 'Consultation required',
+    cad: '$23,800 – $29,400',
     usd: '',
-    treatmentTime: 'Surgery · 4–5 hr · Final result at 6 months'
+    treatmentTime: 'Surgery · 4–5 hr · Final result at 1 year'
   },
   {
     id: 'botox',
     name: 'Botox',
     desc: "Soften forehead, frown lines & crow's feet",
-    cad: '$120 – $1,020',
-    usd: '$89 – $756',
-    treatmentTime: '15 min · Visible at 2 weeks'
+    cad: 'Consultation',
+    usd: '',
+    treatmentTime: '15 min · Peak result at 2 weeks'
   },
   {
     id: 'lip_cheek_filler',
     name: 'Lip & Cheek Filler',
     desc: 'Fuller lips, lifted cheekbones',
-    cad: '$900 – $1,500',
-    usd: '$666 – $1,110',
-    treatmentTime: '30–45 min · Visible immediately'
+    cad: 'Consultation',
+    usd: '',
+    treatmentTime: '30–45 min · Final result at 1 week'
   },
   {
     id: 'co2_laser',
     name: 'CO2 Laser',
     desc: 'Smooth texture, fade lines & scarring',
-    cad: '$1,500 – $3,500',
-    usd: '$1,110 – $2,590',
-    treatmentTime: 'Single session · Final result at 3 months'
+    cad: '$2,800 – $2,970 (full face)',
+    usd: '',
+    treatmentTime: 'Single session · Final result at 6 months'
   },
   {
     id: 'bbl_photofacial',
     name: 'BBL Photofacial',
     desc: 'Fade sun spots, redness & uneven tone',
-    cad: '$450 – $750',
-    usd: '$333 – $555',
-    treatmentTime: '30 min · 3-treatment series recommended'
+    cad: '$465 (full face)',
+    usd: '',
+    treatmentTime: '30 min · Optimal result at 1 week'
   }
 ];
 
@@ -1235,7 +1244,15 @@ function BeforeAfterSlider({
 /* ---------------------------------------------------------------- */
 
 function PriceBox({ procedure }: { procedure: Procedure }) {
-  const isConsultation = !procedure.usd && /consult/i.test(procedure.cad);
+  const isConsultation = /consult/i.test(procedure.cad);
+  const isSurgery =
+    procedure.id === 'ultrasonic_rhinoplasty' ||
+    procedure.id === 'deep_plane_facelift';
+  const label = isConsultation
+    ? 'Pricing'
+    : isSurgery
+      ? 'Estimated Investment'
+      : 'Starting Price';
   return (
     <div
       className="mt-6"
@@ -1250,18 +1267,18 @@ function PriceBox({ procedure }: { procedure: Procedure }) {
         className="text-[12px] uppercase tracking-[0.16em]"
         style={{ color: '#C9A84C', fontWeight: 600 }}
       >
-        {isConsultation ? 'Estimated Investment' : 'Estimated Price'}
+        {label}
       </p>
       <p className="text-[15px] mt-1" style={{ color: '#FFFFFF' }}>
         {isConsultation
-          ? procedure.cad
-          : `Approximately ${procedure.cad}${procedure.usd ? ` CAD · ${procedure.usd} USD` : ''}`}
+          ? 'Pricing confirmed at your free consultation'
+          : `${procedure.cad} CAD${procedure.usd ? ` · ${procedure.usd} USD` : ''}`}
       </p>
       <p
         className="text-[12px] mt-2"
         style={{ color: 'rgba(255,255,255,0.55)' }}
       >
-        Confirmed at your free consultation.
+        Source: cliniquefacemd.com/prices. Taxes excluded.
       </p>
       <p
         className="text-[12px] mt-1"
