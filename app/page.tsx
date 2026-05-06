@@ -15,6 +15,15 @@ import {
   type Clinic
 } from './lib/clinics';
 import { useLocation } from './lib/useLocation';
+import {
+  formatPrice,
+  PROCEDURE_IDS,
+  PROCEDURE_IS_PUBLISHED_PRICE,
+  PROCEDURE_STARTING_PRICE,
+  useI18n,
+  type Lang,
+  type ProcedureId
+} from './lib/i18n';
 
 /* ---------------------------------------------------------------- */
 /*  Types                                                            */
@@ -22,99 +31,41 @@ import { useLocation } from './lib/useLocation';
 
 type Screen = 'welcome' | 'step1' | 'step2' | 'result';
 
-type ProcedureId =
-  | 'ultrasonic_rhinoplasty'
-  | 'deep_plane_facelift'
-  | 'botox'
-  | 'lip_cheek_filler'
-  | 'co2_laser'
-  | 'bbl_photofacial';
-
+/**
+ * Display-ready procedure data resolved at render time from the i18n
+ * dictionary plus the static numeric pricing table. The previous
+ * version stored copy in this object directly — we now derive it from
+ * the active language so the UI updates instantly when the user
+ * toggles EN/FR.
+ */
 type Procedure = {
   id: ProcedureId;
   name: string;
   desc: string;
-  cad: string;
-  usd: string;
-  // What patients are paying for; shown in the price box
+  // Localized "Starting at $X CAD" / "À partir de X $ CA". Used on the
+  // result page only — pricing is intentionally hidden on the picker.
+  cadDisplay: string;
+  // Treatment time + final-result timeline. Shown ONLY on the result
+  // page (per Dr. Moubayed's spec: keep the picker clean).
   treatmentTime: string;
 };
 
-// Pricing strategy (Dr. Moubayed's direction):
-//   - Show "Starting at $X CAD" only — never a max price or range.
-//   - Surgery / CO2 / BBL pull the LOW END of cliniquefacemd.com/prices.
-//   - Botox / lip filler / cheek filler use the LOW END of Montreal
-//     market ranges (sources: Derma Secret 2025 Botox guide,
-//     Centre Esthétique Montréal lip filler pricing).
-//   - All actual quotes happen at the consultation — "starting at"
-//     anchors the conversation without setting a ceiling.
-//
-// Final-result timelines per Dr. Moubayed's clinical guidance:
-//   surgery        → 1 year (12 months)
-//   botox peak     → 2 weeks
-//   filler final   → 1 week
-//   CO2 final      → 6 months
-//   BBL optimal    → 1 week
-const PROCEDURES: Procedure[] = [
-  {
-    id: 'ultrasonic_rhinoplasty',
-    name: 'Ultrasonic Rhinoplasty',
-    desc: 'Precision nose reshaping with piezoelectric instruments',
-    cad: 'Starting at $11,900',
-    usd: '',
-    treatmentTime: 'Surgery · 2–3 hr · Final result at 1 year'
-  },
-  {
-    id: 'deep_plane_facelift',
-    name: 'Deep Plane Facelift',
-    desc: 'Lift midface, jowls & neck as one unit',
-    cad: 'Starting at $23,800',
-    usd: '',
-    treatmentTime: 'Surgery · 4–5 hr · Final result at 1 year'
-  },
-  {
-    id: 'botox',
-    name: 'Botox',
-    desc: "Soften forehead, frown lines & crow's feet",
-    cad: 'Starting at $400',
-    usd: '',
-    treatmentTime: '15 min · Peak result at 2 weeks'
-  },
-  {
-    id: 'lip_cheek_filler',
-    name: 'Lip & Cheek Filler',
-    desc: 'Fuller lips, lifted cheekbones',
-    cad: 'Starting at $625',
-    usd: '',
-    treatmentTime: '30–45 min · Final result at 1 week'
-  },
-  {
-    id: 'co2_laser',
-    name: 'CO2 Laser',
-    desc: 'Smooth texture, fade lines & scarring',
-    cad: 'Starting at $2,800',
-    usd: '',
-    treatmentTime: 'Single session · Final result at 6 months'
-  },
-  {
-    id: 'bbl_photofacial',
-    name: 'BBL Photofacial',
-    desc: 'Fade sun spots, redness & uneven tone',
-    cad: 'Starting at $465',
-    usd: '',
-    treatmentTime: '30 min · Optimal result at 1 week'
-  }
-];
-
-// Which procedures source from cliniquefacemd.com/prices (vs. Montreal market)
-const PUBLISHED_PRICE: Record<ProcedureId, boolean> = {
-  ultrasonic_rhinoplasty: true,
-  deep_plane_facelift: true,
-  botox: false,
-  lip_cheek_filler: false,
-  co2_laser: true,
-  bbl_photofacial: true
-};
+/** Build the localized procedure list for the active language. */
+function useProcedures(): Procedure[] {
+  const { t, lang } = useI18n();
+  return PROCEDURE_IDS.map((id) => ({
+    id,
+    name: t(`proc.${id}.name`),
+    desc: t(`proc.${id}.desc`),
+    cadDisplay:
+      t('price.startingAt', {
+        amount: formatPrice(PROCEDURE_STARTING_PRICE[id], lang)
+      }) +
+      ' ' +
+      t('result.cadSuffix'),
+    treatmentTime: t(`proc.${id}.timing`)
+  }));
+}
 
 /* ---------------------------------------------------------------- */
 /*  Logo                                                             */
@@ -175,6 +126,9 @@ function Logo({ size = 'md' }: { size?: 'sm' | 'md' | 'lg' }) {
 /* ---------------------------------------------------------------- */
 
 export default function HomePage() {
+  const { t } = useI18n();
+  const procedures = useProcedures();
+
   const [screen, setScreen] = useState<Screen>('welcome');
   const [selectedProcedure, setSelectedProcedure] =
     useState<ProcedureId | null>(null);
@@ -183,7 +137,8 @@ export default function HomePage() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const selectedMeta = PROCEDURES.find((p) => p.id === selectedProcedure) || null;
+  const selectedMeta =
+    procedures.find((p) => p.id === selectedProcedure) || null;
 
   const reset = useCallback(() => {
     setScreen('welcome');
@@ -213,17 +168,21 @@ export default function HomePage() {
 
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
-        throw new Error(j?.error || 'Simulation failed.');
+        // Server-side errors are emitted in English. We translate the
+        // generic fallback ourselves so French users never see English
+        // copy unless the API surfaced something unexpected (and even
+        // then, the message is short and readable in both languages).
+        throw new Error(j?.error || t('error.fallbackMessage'));
       }
 
       const data = (await res.json()) as { resultUrl: string };
       setResultPhoto(data.resultUrl);
     } catch (err: any) {
-      setError(err?.message || 'Simulation failed. Please try again.');
+      setError(err?.message || t('error.fallbackMessage'));
     } finally {
       setIsLoading(false);
     }
-  }, [userPhoto, selectedProcedure]);
+  }, [userPhoto, selectedProcedure, t]);
 
   return (
     <main className="min-h-screen bg-bg flex flex-col items-center">
@@ -232,6 +191,7 @@ export default function HomePage() {
 
         {screen === 'step1' && (
           <ChooseProcedureScreen
+            procedures={procedures}
             selected={selectedProcedure}
             onSelect={setSelectedProcedure}
             onBack={() => setScreen('welcome')}
@@ -270,10 +230,14 @@ export default function HomePage() {
 /* ---------------------------------------------------------------- */
 
 function WelcomeScreen({ onStart }: { onStart: () => void }) {
+  const { t } = useI18n();
+  const subtitleLines = t('welcome.subtitle').split('\n');
+
   return (
     <section className="flex-1 flex flex-col min-h-[100dvh] py-12 animate-fade-up">
-      <div className="pt-2">
+      <div className="pt-2 flex items-center justify-between">
         <Logo size="md" />
+        <LanguageToggle />
       </div>
 
       <div className="flex-1 flex flex-col justify-center text-center -mt-6">
@@ -288,21 +252,30 @@ function WelcomeScreen({ onStart }: { onStart: () => void }) {
           }}
           className="mb-5"
         >
-          See it before<br />you do it.
+          {t('welcome.headlineLine1')}
+          <br />
+          {t('welcome.headlineLine2')}
         </h1>
         <p
           className="text-[15px] mx-auto"
           style={{ color: 'rgba(255,255,255,0.7)', maxWidth: 320 }}
         >
-          AI-powered aesthetic simulation.
-          <br />
-          Free. 60 seconds.
+          {subtitleLines.map((line, i) => (
+            <span key={i}>
+              {line}
+              {i < subtitleLines.length - 1 && <br />}
+            </span>
+          ))}
         </p>
       </div>
 
       <div className="space-y-4 mt-8">
-        <button className="btn-primary" onClick={onStart} aria-label="Start simulation">
-          Start Free Simulation →
+        <button
+          className="btn-primary"
+          onClick={onStart}
+          aria-label={t('welcome.cta')}
+        >
+          {t('welcome.cta')}
         </button>
 
         <div className="text-center">
@@ -311,7 +284,7 @@ function WelcomeScreen({ onStart }: { onStart: () => void }) {
             style={{ color: 'rgba(255,255,255,0.6)' }}
           >
             <span style={{ color: '#F5A623' }}>★</span>
-            4.9 · Clinique Face MD · Montréal
+            {t('welcome.ratingLine')}
           </span>
         </div>
 
@@ -319,12 +292,75 @@ function WelcomeScreen({ onStart }: { onStart: () => void }) {
           className="text-[11px] text-center leading-relaxed pt-2"
           style={{ color: 'rgba(255,255,255,0.4)' }}
         >
-          Simulations are AI-generated previews and do not represent guaranteed
-          medical outcomes. Final results vary and are determined during your
-          consultation with a licensed practitioner.
+          {t('welcome.disclaimer')}
         </p>
       </div>
     </section>
+  );
+}
+
+/* ---------------------------------------------------------------- */
+/*  Language toggle                                                   */
+/* ---------------------------------------------------------------- */
+
+/**
+ * Compact EN / FR pill-toggle. The active language reads bright; the
+ * inactive language sits at low opacity so it doesn't compete with the
+ * brand wordmark.
+ */
+function LanguageToggle() {
+  const { lang, setLang } = useI18n();
+  const baseStyle: CSSProperties = {
+    fontFamily: "var(--font-inter), Inter, system-ui, sans-serif",
+    fontSize: 11,
+    letterSpacing: '0.18em',
+    fontWeight: 500,
+    textTransform: 'uppercase',
+    background: 'transparent',
+    border: 'none',
+    padding: '6px 8px',
+    cursor: 'pointer',
+    transition: 'color 160ms ease'
+  };
+  const activeColor = '#FFFFFF';
+  const inactiveColor = 'rgba(255,255,255,0.35)';
+  return (
+    <div
+      role="group"
+      aria-label="Language"
+      className="select-none-ui flex items-center"
+      style={{
+        border: '1px solid rgba(255,255,255,0.14)',
+        borderRadius: 999,
+        padding: '2px',
+        background: 'rgba(255,255,255,0.02)'
+      }}
+    >
+      <button
+        onClick={() => setLang('en')}
+        aria-pressed={lang === 'en'}
+        style={{
+          ...baseStyle,
+          color: lang === 'en' ? activeColor : inactiveColor,
+          borderRadius: 999,
+          background: lang === 'en' ? 'rgba(201,168,76,0.10)' : 'transparent'
+        }}
+      >
+        EN
+      </button>
+      <button
+        onClick={() => setLang('fr')}
+        aria-pressed={lang === 'fr'}
+        style={{
+          ...baseStyle,
+          color: lang === 'fr' ? activeColor : inactiveColor,
+          borderRadius: 999,
+          background: lang === 'fr' ? 'rgba(201,168,76,0.10)' : 'transparent'
+        }}
+      >
+        FR
+      </button>
+    </div>
   );
 }
 
@@ -333,16 +369,19 @@ function WelcomeScreen({ onStart }: { onStart: () => void }) {
 /* ---------------------------------------------------------------- */
 
 function ChooseProcedureScreen({
+  procedures,
   selected,
   onSelect,
   onBack,
   onContinue
 }: {
+  procedures: Procedure[];
   selected: ProcedureId | null;
   onSelect: (id: ProcedureId) => void;
   onBack: () => void;
   onContinue: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <section className="pt-6 pb-6 animate-fade-up flex-1 flex flex-col">
       <Header step={1} onBack={onBack} />
@@ -357,17 +396,19 @@ function ChooseProcedureScreen({
         }}
         className="mt-6"
       >
-        Choose your<br />procedure.
+        {t('step1.titleLine1')}
+        <br />
+        {t('step1.titleLine2')}
       </h2>
       <p
         className="text-[14px] mt-3 mb-6"
         style={{ color: 'rgba(255,255,255,0.55)' }}
       >
-        Pick one to preview on your photo.
+        {t('step1.subtitle')}
       </p>
 
       <div className="space-y-3 flex-1">
-        {PROCEDURES.map((p) => {
+        {procedures.map((p) => {
           const isSelected = selected === p.id;
           return (
             <button
@@ -409,14 +450,10 @@ function ChooseProcedureScreen({
                     {p.desc}
                   </div>
                   {/* Pricing intentionally hidden on the picker.
-                      Patients see pricing only AFTER their simulation
-                      so the visualization sells the value first. */}
-                  <div
-                    className="text-[12px] mt-2"
-                    style={{ color: 'rgba(255,255,255,0.45)' }}
-                  >
-                    {p.treatmentTime}
-                  </div>
+                      Treatment-time + final-result timeline also
+                      moved to the result page (per Dr. Moubayed's
+                      v4.3 spec): keep the picker clean and let the
+                      visualization sell the value first. */}
                 </div>
 
                 <div
@@ -460,7 +497,7 @@ function ChooseProcedureScreen({
           onClick={onContinue}
           disabled={!selected}
         >
-          Continue →
+          {t('common.continue')}
         </button>
       </div>
     </section>
@@ -484,6 +521,7 @@ function PhotoScreen({
   onBack: () => void;
   onContinue: () => void;
 }) {
+  const { t } = useI18n();
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [hasCameraSupport, setHasCameraSupport] = useState(true);
@@ -613,20 +651,22 @@ function PhotoScreen({
         }}
         className="mt-6"
       >
-        Take your<br />photo.
+        {t('step2.titleLine1')}
+        <br />
+        {t('step2.titleLine2')}
       </h2>
       <p
         className="text-[14px] mt-3"
         style={{ color: 'rgba(255,255,255,0.6)' }}
       >
-        Face forward, neutral expression, good lighting.
+        {t('step2.subtitle')}
       </p>
       {isRhino && (
         <p
           className="text-[13px] mt-1"
           style={{ color: '#C9A84C' }}
         >
-          Side profile photo recommended for rhinoplasty.
+          {t('step2.tipRhino')}
         </p>
       )}
       {isFacelift && (
@@ -634,7 +674,7 @@ function PhotoScreen({
           className="text-[13px] mt-1"
           style={{ color: '#C9A84C' }}
         >
-          A relaxed front-facing photo gives the best simulation result.
+          {t('step2.tipFacelift')}
         </p>
       )}
 
@@ -669,10 +709,10 @@ function PhotoScreen({
           </div>
           <div className="mt-8 flex flex-col gap-3 w-full max-w-[300px] px-4">
             <button className="btn-primary" onClick={capturePhoto}>
-              Capture
+              {t('step2.capture')}
             </button>
             <button className="btn-secondary" onClick={closeCamera}>
-              Cancel
+              {t('common.cancel')}
             </button>
           </div>
         </div>
@@ -727,28 +767,28 @@ function PhotoScreen({
               className="text-[13px]"
               style={{ color: 'rgba(255,255,255,0.7)' }}
             >
-              Photo ready.
+              {t('step2.photoReady')}
             </p>
             <button
               onClick={() => onPhotoChange(null)}
               className="text-[13px] underline"
               style={{ color: 'rgba(255,255,255,0.5)' }}
             >
-              Use a different photo
+              {t('step2.useDifferent')}
             </button>
           </div>
         ) : (
           <div className="space-y-3 mt-2">
             {hasCameraSupport && (
               <button className="btn-primary" onClick={openCamera}>
-                Take a Selfie
+                {t('step2.takeSelfie')}
               </button>
             )}
             <button
               className={hasCameraSupport ? 'btn-secondary' : 'btn-primary'}
               onClick={() => fileInputRef.current?.click()}
             >
-              Upload a Photo
+              {t('step2.uploadPhoto')}
             </button>
             <input
               ref={fileInputRef}
@@ -771,14 +811,13 @@ function PhotoScreen({
           disabled={!userPhoto}
           onClick={onContinue}
         >
-          Generate My Simulation →
+          {t('step2.cta')}
         </button>
         <p
           className="text-[11px] text-center mt-3 leading-relaxed"
           style={{ color: 'rgba(255,255,255,0.4)' }}
         >
-          Your photo is used only for this simulation. We do not store
-          identifiable images on our servers.
+          {t('step2.privacy')}
         </p>
       </div>
     </section>
@@ -837,6 +876,7 @@ function LoadingState({
   procedure: Procedure;
   userPhoto: string;
 }) {
+  const { t } = useI18n();
   return (
     <div className="flex-1 flex flex-col items-center justify-center text-center pt-10 pb-12">
       <div
@@ -870,13 +910,13 @@ function LoadingState({
           marginTop: 28
         }}
       >
-        Generating your simulation…
+        {t('loading.title')}
       </h3>
       <p
         className="text-[14px] mt-2"
         style={{ color: 'rgba(255,255,255,0.55)', maxWidth: 320 }}
       >
-        AI is applying {procedure.name.toLowerCase()} to your photo.
+        {t('loading.aiApplying', { procedure: procedure.name.toLowerCase() })}
       </p>
 
       <div
@@ -899,7 +939,7 @@ function LoadingState({
         className="text-[11px] mt-5"
         style={{ color: 'rgba(255,255,255,0.35)' }}
       >
-        This usually takes 15–30 seconds.
+        {t('loading.timing')}
       </p>
     </div>
   );
@@ -914,6 +954,7 @@ function ErrorState({
   onRetry: () => void;
   onReset: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <div className="flex-1 flex flex-col items-center justify-center text-center pt-10 pb-12">
       <div
@@ -951,7 +992,7 @@ function ErrorState({
           fontSize: '26px'
         }}
       >
-        Simulation unavailable right now.
+        {t('error.title')}
       </h3>
       <p
         className="text-[13px] mt-3 max-w-[320px]"
@@ -962,20 +1003,20 @@ function ErrorState({
 
       <div className="mt-8 w-full max-w-[300px] space-y-3">
         <button className="btn-primary" onClick={onRetry}>
-          Try Again
+          {t('common.tryAgain')}
         </button>
         <button
           className="btn-secondary"
           onClick={() => window.open('http://rdv.facemd.com/', '_blank')}
         >
-          Book Directly →
+          {t('error.bookDirectly')}
         </button>
         <button
           className="text-[13px] underline w-full pt-2"
           style={{ color: 'rgba(255,255,255,0.5)' }}
           onClick={onReset}
         >
-          Start over
+          {t('common.startOver')}
         </button>
       </div>
     </div>
@@ -993,6 +1034,7 @@ function ResultContent({
   resultPhoto: string;
   onReset: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <div className="flex-1 flex flex-col">
       <h2
@@ -1005,13 +1047,13 @@ function ResultContent({
         }}
         className="mt-4"
       >
-        Your SimFaceMD Result
+        {t('result.title')}
       </h2>
       <p
         className="text-[13px] mt-2 mb-6"
         style={{ color: 'rgba(255,255,255,0.6)' }}
       >
-        {procedure.name} · Clinique Face MD
+        {t('result.subtitle', { procedure: procedure.name })}
       </p>
 
       <BeforeAfterSlider before={userPhoto} after={resultPhoto} />
@@ -1020,14 +1062,17 @@ function ResultContent({
 
       <ClinicSection />
 
-      <ActionRow procedure={procedure} resultPhoto={resultPhoto} onReset={onReset} />
+      <ActionRow
+        procedure={procedure}
+        resultPhoto={resultPhoto}
+        onReset={onReset}
+      />
 
       <p
         className="text-[11px] text-center leading-relaxed mt-6"
         style={{ color: 'rgba(255,255,255,0.4)' }}
       >
-        AI-generated preview. Actual outcomes vary and are determined during a
-        consultation with a licensed practitioner.
+        {t('result.disclaimer')}
       </p>
     </div>
   );
@@ -1044,6 +1089,7 @@ function BeforeAfterSlider({
   before: string;
   after: string;
 }) {
+  const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [sliderPos, setSliderPos] = useState(50);
   const draggingRef = useRef(false);
@@ -1147,7 +1193,7 @@ function BeforeAfterSlider({
       {/* BEFORE — full image underneath */}
       <img
         src={before}
-        alt="Before"
+        alt={t('result.before')}
         draggable={false}
         style={{
           position: 'absolute',
@@ -1162,7 +1208,7 @@ function BeforeAfterSlider({
       {/* AFTER — clipped from left by sliderPos% */}
       <img
         src={after}
-        alt="After"
+        alt={t('result.after')}
         draggable={false}
         crossOrigin="anonymous"
         style={{
@@ -1189,7 +1235,7 @@ function BeforeAfterSlider({
           pointerEvents: 'none'
         }}
       >
-        Before
+        {t('result.before')}
       </div>
       <div
         className="absolute right-3 bottom-3 text-[11px] uppercase tracking-[0.18em]"
@@ -1202,7 +1248,7 @@ function BeforeAfterSlider({
           pointerEvents: 'none'
         }}
       >
-        After
+        {t('result.after')}
       </div>
 
       {/* Vertical divider line */}
@@ -1226,7 +1272,7 @@ function BeforeAfterSlider({
         onMouseDown={handleMouseDown}
         onTouchStart={handleTouchStart}
         onClick={(e) => e.stopPropagation()}
-        aria-label="Drag to compare before and after"
+        aria-label={t('result.dragAria')}
         style={{
           position: 'absolute',
           top: '50%',
@@ -1262,11 +1308,12 @@ function BeforeAfterSlider({
 /* ---------------------------------------------------------------- */
 
 function PriceBox({ procedure }: { procedure: Procedure }) {
-  const isPublished = PUBLISHED_PRICE[procedure.id];
+  const { t } = useI18n();
+  const isPublished = PROCEDURE_IS_PUBLISHED_PRICE[procedure.id];
   // Source line differs for published vs Montreal-market starting prices
   const sourceLine = isPublished
-    ? 'Source: cliniquefacemd.com/prices. Final quote at your free consultation. Taxes excluded.'
-    : 'Montreal starting price. Final quote at your free consultation. Taxes excluded.';
+    ? t('result.sourcePublished')
+    : t('result.sourceMontreal');
   return (
     <div
       className="mt-6"
@@ -1281,10 +1328,10 @@ function PriceBox({ procedure }: { procedure: Procedure }) {
         className="text-[12px] uppercase tracking-[0.16em]"
         style={{ color: '#C9A84C', fontWeight: 600 }}
       >
-        Investment
+        {t('result.investmentLabel')}
       </p>
       <p className="text-[15px] mt-1" style={{ color: '#FFFFFF' }}>
-        {procedure.cad} CAD
+        {procedure.cadDisplay}
       </p>
       <p
         className="text-[12px] mt-2"
@@ -1303,6 +1350,7 @@ function PriceBox({ procedure }: { procedure: Procedure }) {
 }
 
 function ClinicSection() {
+  const { t } = useI18n();
   const { location, requestPreciseLocation } = useLocation();
   const [showAll, setShowAll] = useState(false);
   const [requestingPrecise, setRequestingPrecise] = useState(false);
@@ -1323,7 +1371,9 @@ function ClinicSection() {
 
   // Banner text — only show if we successfully detected a city
   const locationLabel = location?.city
-    ? `Showing clinics near ${location.city}${location.region ? ', ' + location.region : ''}`
+    ? t('clinic.locationBanner', {
+        city: `${location.city}${location.region ? ', ' + location.region : ''}`
+      })
     : null;
 
   const handleUseMyLocation = async () => {
@@ -1375,8 +1425,9 @@ function ClinicSection() {
                 borderRadius: 10
               }}
             >
-              See {others.length} other{others.length === 1 ? '' : 's'} location
-              {others.length === 1 ? '' : 's'}
+              {others.length === 1
+                ? t('clinic.seeOtherSingular', { n: others.length })
+                : t('clinic.seeOtherPlural', { n: others.length })}
             </button>
           ) : (
             <div className="space-y-3">
@@ -1401,8 +1452,8 @@ function ClinicSection() {
           style={{ color: 'rgba(255,255,255,0.45)' }}
         >
           {requestingPrecise
-            ? 'Locating…'
-            : 'Use my precise location for better results'}
+            ? t('clinic.locating')
+            : t('clinic.usePreciseLocation')}
         </button>
       )}
     </div>
@@ -1418,6 +1469,7 @@ function ClinicCard({
   primary?: boolean;
   distanceKm?: number;
 }) {
+  const { t } = useI18n();
   return (
     <div
       style={{
@@ -1471,7 +1523,7 @@ function ClinicCard({
         <span style={{ color: '#F5A623', letterSpacing: 1 }}>★★★★★</span>
         <span style={{ color: '#FFFFFF', fontWeight: 500 }}>{clinic.rating}</span>
         <span style={{ color: 'rgba(255,255,255,0.45)' }}>
-          · {clinic.reviewSource}
+          · {t('clinic.googleReviews')}
         </span>
       </div>
       <a
@@ -1488,19 +1540,33 @@ function ClinicCard({
           onClick={() => window.open(clinic.bookingUrl, '_blank')}
           style={!primary ? { minHeight: 44, fontSize: 14 } : undefined}
         >
-          Book My Consultation →
+          {t('clinic.bookConsultation')}
         </button>
         {primary && (
           <button
             className="btn-secondary"
             onClick={() => window.open(clinic.websiteUrl, '_blank')}
           >
-            Visit {new URL(clinic.websiteUrl).hostname.replace('www.', '')}
+            {t('clinic.visitWebsite', {
+              host: new URL(clinic.websiteUrl).hostname.replace('www.', '')
+            })}
           </button>
         )}
       </div>
     </div>
   );
+}
+
+/**
+ * Convert a data: URL or remote URL into an in-memory File object.
+ * The Web Share API (level 2) requires File[] objects to share images;
+ * a string URL alone won't trigger Instagram/WhatsApp targets in the
+ * native share sheet on iOS or Android.
+ */
+async function urlToFile(url: string, filename: string): Promise<File> {
+  const resp = await fetch(url);
+  const blob = await resp.blob();
+  return new File([blob], filename, { type: blob.type || 'image/jpeg' });
 }
 
 function ActionRow({
@@ -1512,56 +1578,224 @@ function ActionRow({
   resultPhoto: string;
   onReset: () => void;
 }) {
+  const { t } = useI18n();
   const [shareStatus, setShareStatus] = useState<string>('');
+  const [busy, setBusy] = useState<null | 'share' | 'download' | 'wa' | 'ig'>(
+    null
+  );
 
-  const handleShare = async () => {
-    const shareData = {
-      title: 'My SimFaceMD Result',
-      text: `My ${procedure.name} simulation from SimFaceMD by Clinique Face MD`,
-      url: typeof window !== 'undefined' ? window.location.href : ''
-    };
+  // Pre-filled caption — every share doubles as a free ad. Keep it short
+  // enough that it survives Instagram / WhatsApp / iMessage paste limits.
+  const siteUrl =
+    typeof window !== 'undefined' ? window.location.origin : 'https://cliniquefacemd.com';
+  const caption = t('share.captionTemplate', {
+    procedure: procedure.name,
+    url: siteUrl
+  });
+  const filename = `simfacemd-${procedure.id}.jpg`;
 
+  const flash = (msg: string) => {
+    setShareStatus(msg);
+    setTimeout(() => setShareStatus(''), 2200);
+  };
+
+  // ——— Native share (image + caption). Falls through to copy-link if
+  // the platform / browser doesn't support sharing files.
+  const handleNativeShare = async () => {
+    setBusy('share');
     try {
-      if (navigator.share) {
+      const file = await urlToFile(resultPhoto, filename);
+      const shareData: ShareData = {
+        title: t('share.shareTitle'),
+        text: caption,
+        files: [file]
+      };
+      // canShare may not exist on older browsers — try optimistically.
+      const canShareFiles =
+        typeof navigator.canShare === 'function' && navigator.canShare(shareData);
+      if (navigator.share && canShareFiles) {
         await navigator.share(shareData);
+      } else if (navigator.share) {
+        // Browser supports share but not files — fall back to text+url.
+        await navigator.share({
+          title: t('share.shareTitle'),
+          text: caption
+        });
       } else if (navigator.clipboard) {
-        await navigator.clipboard.writeText(
-          `${shareData.text} — ${shareData.url}`
-        );
-        setShareStatus('Link copied');
-        setTimeout(() => setShareStatus(''), 2000);
+        await navigator.clipboard.writeText(caption);
+        flash(t('share.captionCopied'));
       }
+    } catch (e: any) {
+      // AbortError = user dismissed share sheet — silent.
+      if (e?.name && e.name !== 'AbortError') {
+        flash(t('share.unavailable'));
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // ——— Download the watermarked JPEG.
+  const handleDownload = async () => {
+    setBusy('download');
+    try {
+      const file = await urlToFile(resultPhoto, filename);
+      const url = URL.createObjectURL(file);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Revoke after a tick so iOS Safari doesn't cancel the download.
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+      flash(t('share.savedToDevice'));
     } catch {
-      // User cancelled — silently ignore
+      flash(t('share.downloadFailed'));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // ——— WhatsApp deep link. WhatsApp's web URL only carries text, not
+  // files — so we copy the image to the clipboard (when supported) and
+  // pre-fill the message text. The user pastes the image in the chat.
+  const handleWhatsApp = async () => {
+    setBusy('wa');
+    try {
+      // Copy image to clipboard for paste-into-chat (Chrome/Edge desktop, some Android).
+      let copiedImage = false;
+      try {
+        if (
+          typeof window !== 'undefined' &&
+          typeof (window as any).ClipboardItem !== 'undefined' &&
+          navigator.clipboard?.write
+        ) {
+          const resp = await fetch(resultPhoto);
+          const blob = await resp.blob();
+          const Ctor = (window as any).ClipboardItem;
+          await navigator.clipboard.write([new Ctor({ [blob.type]: blob })]);
+          copiedImage = true;
+        }
+      } catch {
+        copiedImage = false;
+      }
+
+      const waUrl = `https://wa.me/?text=${encodeURIComponent(caption)}`;
+      window.open(waUrl, '_blank');
+      flash(copiedImage ? t('share.imageCopied') : t('share.openedWhatsapp'));
+    } catch {
+      flash(t('share.unavailable'));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // ——— Instagram doesn't expose a public web share-to-Story URL.
+  // Best UX: native share sheet (iOS/Android lets the user pick
+  // Instagram), with a graceful fallback that downloads the image and
+  // tells them how to attach it.
+  const handleInstagram = async () => {
+    setBusy('ig');
+    try {
+      const file = await urlToFile(resultPhoto, filename);
+      const shareData: ShareData = {
+        title: t('share.shareTitle'),
+        text: caption,
+        files: [file]
+      };
+      const canShareFiles =
+        typeof navigator.canShare === 'function' && navigator.canShare(shareData);
+      if (navigator.share && canShareFiles) {
+        await navigator.share(shareData);
+      } else {
+        // Desktop or unsupported — download the image so they can attach
+        // it manually to a Story.
+        await handleDownload();
+        flash(t('share.imageSavedStory'));
+      }
+    } catch (e: any) {
+      if (e?.name && e.name !== 'AbortError') {
+        flash(t('share.unavailable'));
+      }
+    } finally {
+      setBusy(null);
     }
   };
 
   return (
-    <div className="mt-5 grid grid-cols-2 gap-3">
+    <div className="mt-5">
+      {/* Primary native share — the big gold button */}
+      <button
+        onClick={handleNativeShare}
+        disabled={busy === 'share'}
+        className="btn-primary"
+        style={{ minHeight: 50, fontSize: 15 }}
+      >
+        {busy === 'share' ? t('share.preparing') : t('share.primary')}
+      </button>
+
+      {/* Three explicit shortcuts: WhatsApp, Instagram, Download */}
+      <div className="mt-3 grid grid-cols-3 gap-2">
+        <button
+          onClick={handleWhatsApp}
+          disabled={busy === 'wa'}
+          className="btn-secondary"
+          style={{ minHeight: 44, fontSize: 13, padding: '0 8px' }}
+          aria-label={t('share.whatsappAria')}
+        >
+          {busy === 'wa' ? '…' : t('share.whatsapp')}
+        </button>
+        <button
+          onClick={handleInstagram}
+          disabled={busy === 'ig'}
+          className="btn-secondary"
+          style={{ minHeight: 44, fontSize: 13, padding: '0 8px' }}
+          aria-label={t('share.instagramAria')}
+        >
+          {busy === 'ig' ? '…' : t('share.instagram')}
+        </button>
+        <button
+          onClick={handleDownload}
+          disabled={busy === 'download'}
+          className="btn-secondary"
+          style={{ minHeight: 44, fontSize: 13, padding: '0 8px' }}
+          aria-label={t('share.downloadAria')}
+        >
+          {busy === 'download' ? '…' : t('share.download')}
+        </button>
+      </div>
+
+      {/* Try-another link */}
       <button
         onClick={onReset}
-        className="btn-secondary"
-        style={{ minHeight: 46, fontSize: 14 }}
+        className="w-full text-[13px] underline mt-4"
+        style={{ color: 'rgba(255,255,255,0.55)' }}
       >
-        🔄 Try Another
+        {t('share.tryAnother')}
       </button>
-      <button
-        onClick={handleShare}
-        className="btn-secondary"
-        style={{ minHeight: 46, fontSize: 14 }}
-      >
-        {shareStatus || 'Share'}
-      </button>
+
+      {shareStatus && (
+        <p
+          className="text-[12px] text-center mt-3"
+          style={{ color: '#C9A84C' }}
+          role="status"
+          aria-live="polite"
+        >
+          {shareStatus}
+        </p>
+      )}
     </div>
   );
 }
 
 function Header({ step, onBack }: { step: 1 | 2 | 3; onBack: () => void }) {
+  const { t } = useI18n();
   return (
     <div className="flex items-center justify-between">
       <button
         onClick={onBack}
-        aria-label="Back"
+        aria-label={t('common.back')}
         className="select-none-ui"
         style={{
           width: 40,
@@ -1593,11 +1827,14 @@ function Header({ step, onBack }: { step: 1 | 2 | 3; onBack: () => void }) {
 
       <Logo size="sm" />
 
-      <div
-        className="text-[12px]"
-        style={{ color: 'rgba(255,255,255,0.45)' }}
-      >
-        Step {step} of 3
+      <div className="flex items-center gap-2">
+        <div
+          className="text-[12px]"
+          style={{ color: 'rgba(255,255,255,0.45)' }}
+        >
+          {t('common.stepXofY', { x: step, y: 3 })}
+        </div>
+        <LanguageToggle />
       </div>
     </div>
   );
