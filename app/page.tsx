@@ -40,9 +40,16 @@ type Procedure = {
   treatmentTime: string;
 };
 
-// Pricing sourced from cliniquefacemd.com/prices (CAD, taxes excluded).
-// Where Face MD does not list a per-procedure price (Botox, lip filler,
-// cheek filler) we mark as "Consultation" rather than invent numbers.
+// Pricing data:
+//   - Surgery (rhinoplasty, facelift), CO2 laser, BBL: published prices
+//     from cliniquefacemd.com/prices (CAD, taxes excluded).
+//   - Botox / lip filler / cheek filler: not posted on the clinic's
+//     public price list, so we show MONTREAL BALLPARK ranges from 2025
+//     industry surveys (Derma Secret 2025 Botox guide, Centre
+//     Esthétique Montréal lip filler pricing, Kontour 2026 filler
+//     guide). The price box flags these as "approximate range" so
+//     patients still book a consult for an exact quote.
+//
 // Final-result timelines per Dr. Moubayed's clinical guidance:
 //   surgery        → 1 year (12 months)
 //   botox peak     → 2 weeks
@@ -70,7 +77,8 @@ const PROCEDURES: Procedure[] = [
     id: 'botox',
     name: 'Botox',
     desc: "Soften forehead, frown lines & crow's feet",
-    cad: 'Consultation',
+    // Montreal ballpark: $14–$18/unit; full upper-face = 40–60 units
+    cad: '$400 – $900 (upper face)',
     usd: '',
     treatmentTime: '15 min · Peak result at 2 weeks'
   },
@@ -78,7 +86,8 @@ const PROCEDURES: Procedure[] = [
     id: 'lip_cheek_filler',
     name: 'Lip & Cheek Filler',
     desc: 'Fuller lips, lifted cheekbones',
-    cad: 'Consultation',
+    // Montreal ballpark: lips 1ml HA $625–$850; cheeks 2ml $1,200–$1,700
+    cad: '$625 – $1,700 per area',
     usd: '',
     treatmentTime: '30–45 min · Final result at 1 week'
   },
@@ -99,6 +108,16 @@ const PROCEDURES: Procedure[] = [
     treatmentTime: '30 min · Optimal result at 1 week'
   }
 ];
+
+// Which procedures use Face MD's posted price (vs. Montreal ballpark range)?
+const PUBLISHED_PRICE: Record<ProcedureId, boolean> = {
+  ultrasonic_rhinoplasty: true,
+  deep_plane_facelift: true,
+  botox: false,
+  lip_cheek_filler: false,
+  co2_laser: true,
+  bbl_photofacial: true
+};
 
 /* ---------------------------------------------------------------- */
 /*  Logo                                                             */
@@ -392,12 +411,14 @@ function ChooseProcedureScreen({
                   >
                     {p.desc}
                   </div>
+                  {/* Pricing intentionally hidden on the picker.
+                      Patients see pricing only AFTER their simulation
+                      so the visualization sells the value first. */}
                   <div
                     className="text-[12px] mt-2"
                     style={{ color: 'rgba(255,255,255,0.45)' }}
                   >
-                    {p.cad} CAD
-                    {p.usd ? ` · ${p.usd} USD` : ''}
+                    {p.treatmentTime}
                   </div>
                 </div>
 
@@ -1244,15 +1265,19 @@ function BeforeAfterSlider({
 /* ---------------------------------------------------------------- */
 
 function PriceBox({ procedure }: { procedure: Procedure }) {
-  const isConsultation = /consult/i.test(procedure.cad);
   const isSurgery =
     procedure.id === 'ultrasonic_rhinoplasty' ||
     procedure.id === 'deep_plane_facelift';
-  const label = isConsultation
-    ? 'Pricing'
-    : isSurgery
-      ? 'Estimated Investment'
-      : 'Starting Price';
+  const isPublished = PUBLISHED_PRICE[procedure.id];
+  const label = isSurgery
+    ? 'Estimated Investment'
+    : isPublished
+      ? 'Starting Price'
+      : 'Approximate Range';
+  // Source line differs for published vs ballpark-range pricing
+  const sourceLine = isPublished
+    ? 'Source: cliniquefacemd.com/prices. Taxes excluded.'
+    : 'Montreal market range. Final quote at your free consultation. Taxes excluded.';
   return (
     <div
       className="mt-6"
@@ -1270,15 +1295,13 @@ function PriceBox({ procedure }: { procedure: Procedure }) {
         {label}
       </p>
       <p className="text-[15px] mt-1" style={{ color: '#FFFFFF' }}>
-        {isConsultation
-          ? 'Pricing confirmed at your free consultation'
-          : `${procedure.cad} CAD${procedure.usd ? ` · ${procedure.usd} USD` : ''}`}
+        {procedure.cad} CAD
       </p>
       <p
         className="text-[12px] mt-2"
         style={{ color: 'rgba(255,255,255,0.55)' }}
       >
-        Source: cliniquefacemd.com/prices. Taxes excluded.
+        {sourceLine}
       </p>
       <p
         className="text-[12px] mt-1"
