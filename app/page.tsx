@@ -40,15 +40,14 @@ type Procedure = {
   treatmentTime: string;
 };
 
-// Pricing data:
-//   - Surgery (rhinoplasty, facelift), CO2 laser, BBL: published prices
-//     from cliniquefacemd.com/prices (CAD, taxes excluded).
-//   - Botox / lip filler / cheek filler: not posted on the clinic's
-//     public price list, so we show MONTREAL BALLPARK ranges from 2025
-//     industry surveys (Derma Secret 2025 Botox guide, Centre
-//     Esthétique Montréal lip filler pricing, Kontour 2026 filler
-//     guide). The price box flags these as "approximate range" so
-//     patients still book a consult for an exact quote.
+// Pricing strategy (Dr. Moubayed's direction):
+//   - Show "Starting at $X CAD" only — never a max price or range.
+//   - Surgery / CO2 / BBL pull the LOW END of cliniquefacemd.com/prices.
+//   - Botox / lip filler / cheek filler use the LOW END of Montreal
+//     market ranges (sources: Derma Secret 2025 Botox guide,
+//     Centre Esthétique Montréal lip filler pricing).
+//   - All actual quotes happen at the consultation — "starting at"
+//     anchors the conversation without setting a ceiling.
 //
 // Final-result timelines per Dr. Moubayed's clinical guidance:
 //   surgery        → 1 year (12 months)
@@ -61,7 +60,7 @@ const PROCEDURES: Procedure[] = [
     id: 'ultrasonic_rhinoplasty',
     name: 'Ultrasonic Rhinoplasty',
     desc: 'Precision nose reshaping with piezoelectric instruments',
-    cad: '$11,900 – $14,700',
+    cad: 'Starting at $11,900',
     usd: '',
     treatmentTime: 'Surgery · 2–3 hr · Final result at 1 year'
   },
@@ -69,7 +68,7 @@ const PROCEDURES: Procedure[] = [
     id: 'deep_plane_facelift',
     name: 'Deep Plane Facelift',
     desc: 'Lift midface, jowls & neck as one unit',
-    cad: '$23,800 – $29,400',
+    cad: 'Starting at $23,800',
     usd: '',
     treatmentTime: 'Surgery · 4–5 hr · Final result at 1 year'
   },
@@ -77,8 +76,7 @@ const PROCEDURES: Procedure[] = [
     id: 'botox',
     name: 'Botox',
     desc: "Soften forehead, frown lines & crow's feet",
-    // Montreal ballpark: $14–$18/unit; full upper-face = 40–60 units
-    cad: '$400 – $900 (upper face)',
+    cad: 'Starting at $400',
     usd: '',
     treatmentTime: '15 min · Peak result at 2 weeks'
   },
@@ -86,8 +84,7 @@ const PROCEDURES: Procedure[] = [
     id: 'lip_cheek_filler',
     name: 'Lip & Cheek Filler',
     desc: 'Fuller lips, lifted cheekbones',
-    // Montreal ballpark: lips 1ml HA $625–$850; cheeks 2ml $1,200–$1,700
-    cad: '$625 – $1,700 per area',
+    cad: 'Starting at $625',
     usd: '',
     treatmentTime: '30–45 min · Final result at 1 week'
   },
@@ -95,7 +92,7 @@ const PROCEDURES: Procedure[] = [
     id: 'co2_laser',
     name: 'CO2 Laser',
     desc: 'Smooth texture, fade lines & scarring',
-    cad: '$2,800 – $2,970 (full face)',
+    cad: 'Starting at $2,800',
     usd: '',
     treatmentTime: 'Single session · Final result at 6 months'
   },
@@ -103,13 +100,13 @@ const PROCEDURES: Procedure[] = [
     id: 'bbl_photofacial',
     name: 'BBL Photofacial',
     desc: 'Fade sun spots, redness & uneven tone',
-    cad: '$465 (full face)',
+    cad: 'Starting at $465',
     usd: '',
     treatmentTime: '30 min · Optimal result at 1 week'
   }
 ];
 
-// Which procedures use Face MD's posted price (vs. Montreal ballpark range)?
+// Which procedures source from cliniquefacemd.com/prices (vs. Montreal market)
 const PUBLISHED_PRICE: Record<ProcedureId, boolean> = {
   ultrasonic_rhinoplasty: true,
   deep_plane_facelift: true,
@@ -1265,19 +1262,11 @@ function BeforeAfterSlider({
 /* ---------------------------------------------------------------- */
 
 function PriceBox({ procedure }: { procedure: Procedure }) {
-  const isSurgery =
-    procedure.id === 'ultrasonic_rhinoplasty' ||
-    procedure.id === 'deep_plane_facelift';
   const isPublished = PUBLISHED_PRICE[procedure.id];
-  const label = isSurgery
-    ? 'Estimated Investment'
-    : isPublished
-      ? 'Starting Price'
-      : 'Approximate Range';
-  // Source line differs for published vs ballpark-range pricing
+  // Source line differs for published vs Montreal-market starting prices
   const sourceLine = isPublished
-    ? 'Source: cliniquefacemd.com/prices. Taxes excluded.'
-    : 'Montreal market range. Final quote at your free consultation. Taxes excluded.';
+    ? 'Source: cliniquefacemd.com/prices. Final quote at your free consultation. Taxes excluded.'
+    : 'Montreal starting price. Final quote at your free consultation. Taxes excluded.';
   return (
     <div
       className="mt-6"
@@ -1292,7 +1281,7 @@ function PriceBox({ procedure }: { procedure: Procedure }) {
         className="text-[12px] uppercase tracking-[0.16em]"
         style={{ color: '#C9A84C', fontWeight: 600 }}
       >
-        {label}
+        Investment
       </p>
       <p className="text-[15px] mt-1" style={{ color: '#FFFFFF' }}>
         {procedure.cad} CAD

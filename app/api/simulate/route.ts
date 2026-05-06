@@ -71,15 +71,27 @@ const PROCEDURE_PROMPTS: Record<string, string> = {
 
   botox:
     "Using the provided image, perform a clearly visible botox " +
-    "treatment edit at 2 weeks post-injection. ERASE every horizontal " +
-    "forehead wrinkle. ERASE the vertical glabellar 11-lines between " +
-    "the eyebrows. ERASE all crow's feet wrinkles at the outer eye " +
-    "corners. The forehead skin must look completely smooth, taut, " +
-    "glassy, and lifted — like youthful skin with relaxed muscles. " +
-    "Do not change eyebrow position. Keep everything else identical: " +
-    "same person, same eyes, nose, mouth, lips, teeth, cheeks, " +
-    "jawline, skin tone, hair, makeup, lighting, background, head " +
-    "angle, and expression. Do not change the aspect ratio.",
+    "treatment edit at 2 weeks post-injection, targeting the three " +
+    "upper-face areas only. " +
+    "AREA 1 — FOREHEAD: ERASE every single horizontal forehead " +
+    "wrinkle and crease across the entire forehead. The forehead " +
+    "skin must look completely smooth and taut from hairline to " +
+    "brow. " +
+    "AREA 2 — GLABELLA: ERASE the vertical 11-lines (frown lines) " +
+    "between the eyebrows. The glabella must look completely smooth " +
+    "with no vertical creases. " +
+    "AREA 3 — CROW'S FEET: ERASE every wrinkle, fine line, and " +
+    "crease at the outer corners of both eyes (the lateral canthal " +
+    "rhytids). The skin around both eyes must look completely " +
+    "smooth. " +
+    "Overall the upper face should look glassy, lifted, and " +
+    "youthful — like a perfect 2-week botox result. Do not change " +
+    "eyebrow position or shape. Do not change the lower face, " +
+    "cheeks, mouth, or any wrinkles below the eyes. Keep everything " +
+    "else identical: same person, same eyes, nose, mouth, lips, " +
+    "teeth, cheeks, jawline, skin tone, hair, makeup, lighting, " +
+    "background, head angle, and expression. Do not change the " +
+    "aspect ratio.",
 
   lip_cheek_filler:
     "Using the provided image, perform a clearly visible hyaluronic " +
