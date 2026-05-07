@@ -66,6 +66,34 @@ const DICT = {
     fr: 'Les simulations sont des aperçus générés par IA et ne représentent pas un résultat médical garanti. Le résultat final varie selon chaque patient et est déterminé lors de votre consultation avec un médecin agréé.'
   },
 
+  // ---------- Install / Save banner ----------
+  // Three contextual variants: Android (PWA install prompt), iOS Safari
+  // (manual instructions w/ Share button), and desktop (bookmark hint).
+  'install.android.cta': {
+    en: 'Add SimFaceMD to Home Screen',
+    fr: 'Ajouter SimFaceMD à l’écran d’accueil'
+  },
+  'install.android.subtitle': {
+    en: 'One-tap access, no app store.',
+    fr: 'Accès en un geste, sans App Store.'
+  },
+  'install.ios.title': {
+    en: 'Add to Home Screen',
+    fr: 'Ajouter à l’écran d’accueil'
+  },
+  'install.ios.body': {
+    en: 'Tap the Share button below, then “Add to Home Screen”.',
+    fr: 'Touchez le bouton Partager en bas, puis « Sur l’écran d’accueil ».'
+  },
+  'install.desktop.body': {
+    en: 'Bookmark SimFaceMD for quick access — press Ctrl+D (Windows) or ⌘+D (Mac).',
+    fr: 'Ajoutez SimFaceMD à vos favoris — Ctrl+D (Windows) ou ⌘+D (Mac).'
+  },
+  'install.dismiss': {
+    en: 'Dismiss',
+    fr: 'Fermer'
+  },
+
   // ---------- Step 1: choose procedure ----------
   'step1.titleLine1': { en: 'Choose your', fr: 'Choisissez votre' },
   'step1.titleLine2': { en: 'procedure.', fr: 'intervention.' },

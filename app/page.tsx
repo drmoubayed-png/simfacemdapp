@@ -9,6 +9,7 @@ import {
   type CSSProperties
 } from 'react';
 import { flushSync } from 'react-dom';
+import InstallBanner from './components/InstallBanner';
 import {
   CLINICS,
   formatDistance,
@@ -304,6 +305,11 @@ function WelcomeScreen({ onStart }: { onStart: () => void }) {
           {t('welcome.disclaimer')}
         </p>
       </div>
+
+      {/* Smart "save to phone" prompt. Renders nothing if already
+          installed as a PWA, or if the user previously dismissed it.
+          Self-positioned (fixed) — doesn't affect hero layout. */}
+      <InstallBanner />
     </section>
   );
 }
