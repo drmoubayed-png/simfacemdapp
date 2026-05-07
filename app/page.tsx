@@ -9,7 +9,7 @@ import {
   type CSSProperties
 } from 'react';
 import { flushSync } from 'react-dom';
-import InstallBanner from './components/InstallBanner';
+import InstallBanner, { openInstallBanner } from './components/InstallBanner';
 import {
   CLINICS,
   formatDistance,
@@ -244,7 +244,10 @@ function WelcomeScreen({ onStart }: { onStart: () => void }) {
         style={{ position: 'relative', zIndex: 2 }}
       >
         <Logo size="md" />
-        <LanguageToggle />
+        <div className="flex items-center gap-2">
+          <SaveToPhoneButton />
+          <LanguageToggle />
+        </div>
       </div>
 
       <div
@@ -311,6 +314,57 @@ function WelcomeScreen({ onStart }: { onStart: () => void }) {
           Self-positioned (fixed) — doesn't affect hero layout. */}
       <InstallBanner />
     </section>
+  );
+}
+
+/* ---------------------------------------------------------------- */
+/*  Save-to-phone button (manual install banner trigger)              */
+/* ---------------------------------------------------------------- */
+
+/**
+ * Small pill button next to the language toggle in the welcome header.
+ * Clicking it dispatches the simfacemd:install-banner:open event so the
+ * InstallBanner re-opens with the right device-class variant — even if
+ * the user previously dismissed it. Mobile shows just the icon to save
+ * room; sm: and up shows the localized label.
+ */
+function SaveToPhoneButton() {
+  const { t } = useI18n();
+  return (
+    <button
+      type="button"
+      onClick={() => openInstallBanner()}
+      aria-label={t('install.headerButton')}
+      title={t('install.headerButton')}
+      className="select-none-ui flex items-center gap-1.5"
+      style={{
+        fontFamily: 'var(--font-inter), Inter, system-ui, sans-serif',
+        fontSize: 11,
+        letterSpacing: '0.16em',
+        fontWeight: 500,
+        textTransform: 'uppercase',
+        color: '#C9A84C',
+        border: '1px solid rgba(201,168,76,0.45)',
+        background: 'rgba(201,168,76,0.06)',
+        borderRadius: 999,
+        padding: '6px 10px',
+        cursor: 'pointer',
+        whiteSpace: 'nowrap',
+        lineHeight: 1,
+        transition: 'background 160ms ease, border-color 160ms ease'
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = 'rgba(201,168,76,0.14)';
+        e.currentTarget.style.borderColor = 'rgba(201,168,76,0.75)';
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = 'rgba(201,168,76,0.06)';
+        e.currentTarget.style.borderColor = 'rgba(201,168,76,0.45)';
+      }}
+    >
+      <span aria-hidden="true" style={{ fontSize: 14, lineHeight: 1 }}>⤴</span>
+      <span className="hidden md:inline">{t('install.headerShort')}</span>
+    </button>
   );
 }
 

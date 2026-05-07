@@ -89,6 +89,31 @@ const DICT = {
     en: 'Bookmark SimFaceMD for quick access — press Ctrl+D (Windows) or ⌘+D (Mac).',
     fr: 'Ajoutez SimFaceMD à vos favoris — Ctrl+D (Windows) ou ⌘+D (Mac).'
   },
+  // iOS Chrome/Firefox/Edge handoff: Apple only allows Add-to-Home-
+  // Screen from Safari, so we offer to open the page there in one tap.
+  'install.iosOther.title': {
+    en: 'Install via Safari',
+    fr: 'Installer via Safari'
+  },
+  'install.iosOther.body': {
+    en: 'iOS only allows Add to Home Screen from Safari. We’ll switch you over.',
+    fr: 'iOS n’autorise l’ajout à l’écran d’accueil que depuis Safari. On vous y amène.'
+  },
+  'install.iosOther.cta': {
+    en: 'Open in Safari',
+    fr: 'Ouvrir dans Safari'
+  },
+  // Persistent header button — always available even after dismissal.
+  'install.headerButton': {
+    en: 'Save to phone',
+    fr: 'Enregistrer sur le téléphone'
+  },
+  // Compact label shown when the header pill button has room (md+).
+  // Stays short so it never wraps and never crowds the wordmark.
+  'install.headerShort': {
+    en: 'Save',
+    fr: 'Enreg.'
+  },
   'install.dismiss': {
     en: 'Dismiss',
     fr: 'Fermer'

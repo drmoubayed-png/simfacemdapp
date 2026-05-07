@@ -3,26 +3,39 @@
 /**
  * InstallBanner — context-aware "save this to your phone" prompt.
  *
- * Three variants, picked at mount based on UA + standalone state:
+ * Why this exists in five variants and not three:
  *
- *   • Android / Chromium  → captures the `beforeinstallprompt` event
- *                           and shows a CTA that fires the native
- *                           Add-to-Home-Screen prompt on tap.
- *   • iOS Safari          → no install API exists; show a bottom-sheet
- *                           with a tiny animated arrow pointing at the
- *                           browser's Share button + plain instructions.
- *   • Desktop browsers    → slim top bar with the Ctrl/⌘+D bookmark hint.
- *   • Already installed   → render nothing.
+ *   Apple only allows "Add to Home Screen" from **Safari** on iOS.
+ *   Third-party iOS browsers (Chrome/Firefox/Edge — all WebKit
+ *   skins) cannot install a PWA at all. Apple removed
+ *   "Add to Home Screen" from those browsers' share sheets too.
+ *   So if a user lands on the app in iOS Chrome, no in-page
+ *   button can install it — the only path is to open the page
+ *   in Safari first. We support that with the `x-safari-https://`
+ *   URL scheme, which Safari registered specifically for this.
  *
- * The banner waits 3 s after mount before appearing (so it doesn't
- * fight the hero) and respects a localStorage flag so dismiss/install
- * is sticky across visits.
+ * Variants:
+ *
+ *   • android        → fires the native beforeinstallprompt
+ *   • ios-safari     → instructs to use Share → Add to Home Screen,
+ *                       arrow placement is version-aware (iOS 15+ has
+ *                       Share at the bottom-right of the URL bar at
+ *                       the bottom of the screen; older iOS had it
+ *                       at the top — but iOS 15+ is virtually all
+ *                       of the install base in 2026)
+ *   • ios-other      → "Open in Safari" handoff button
+ *   • desktop        → Ctrl/⌘+D bookmark hint
+ *   • none           → already standalone, render nothing
+ *
+ * The banner can be opened on demand via the exported helper so the
+ * welcome screen's header can offer a persistent "Save to phone"
+ * button even after the auto-banner has been dismissed.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useI18n } from '../lib/i18n';
 
-type Variant = 'android' | 'ios' | 'desktop' | 'none';
+type Variant = 'android' | 'ios-safari' | 'ios-other' | 'desktop' | 'none';
 
 // Chrome's beforeinstallprompt isn't in lib.dom.d.ts yet.
 interface BeforeInstallPromptEvent extends Event {
@@ -34,9 +47,21 @@ interface BeforeInstallPromptEvent extends Event {
 // the user dismissed the desktop banner on their laptop earlier, etc.
 const STORAGE_KEYS: Record<Exclude<Variant, 'none'>, string> = {
   android: 'simfacemd:install-banner:android',
-  ios: 'simfacemd:install-banner:ios',
+  'ios-safari': 'simfacemd:install-banner:ios-safari',
+  'ios-other': 'simfacemd:install-banner:ios-other',
   desktop: 'simfacemd:install-banner:desktop'
 };
+
+// ---- Manual-open hook -----------------------------------------------------
+// The welcome header's "Save to phone" button calls this to force the
+// banner open even if the user previously dismissed it. We use a tiny
+// custom-event channel so the header doesn't need to lift state.
+const MANUAL_OPEN_EVENT = 'simfacemd:install-banner:open';
+
+export function openInstallBanner() {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new Event(MANUAL_OPEN_EVENT));
+}
 
 /**
  * Detect whether the page is running as an installed PWA. iOS exposes
@@ -44,7 +69,6 @@ const STORAGE_KEYS: Record<Exclude<Variant, 'none'>, string> = {
  */
 function isStandalone(): boolean {
   if (typeof window === 'undefined') return false;
-  // iOS Safari property — only present when launched from home screen.
   const iosStandalone = (window.navigator as unknown as { standalone?: boolean })
     .standalone === true;
   const mqStandalone = window.matchMedia?.('(display-mode: standalone)').matches === true;
@@ -56,20 +80,23 @@ function detectVariant(): Variant {
   if (isStandalone()) return 'none';
 
   const ua = window.navigator.userAgent;
-  // iPadOS 13+ reports as Mac with touch — catch that case too.
+
+  // iPadOS 13+ reports as Mac with touch — catch that case.
   const isIPad =
     /iPad/i.test(ua) ||
     (/Macintosh/i.test(ua) && (navigator as Navigator).maxTouchPoints > 1);
   const isIOS = /iPhone|iPod/i.test(ua) || isIPad;
-  if (isIOS) return 'ios';
 
-  // Treat anything with a touch-coarse pointer + Android as "android".
-  // The actual install affordance still requires beforeinstallprompt;
-  // we return 'android' here and the component decides whether to
-  // render the CTA based on whether the event fired.
-  const isAndroid = /Android/i.test(ua);
-  if (isAndroid) return 'android';
+  if (isIOS) {
+    // CriOS = Chrome on iOS. FxiOS = Firefox on iOS. EdgiOS = Edge on iOS.
+    // Brave on iOS reports as Safari (no distinguishing token), so it
+    // gets bucketed with Safari — that's correct, Brave on iOS DOES
+    // support Add to Home Screen via Safari's WebKit shell.
+    const isThirdPartyIOS = /CriOS|FxiOS|EdgiOS|OPiOS|YaBrowser/i.test(ua);
+    return isThirdPartyIOS ? 'ios-other' : 'ios-safari';
+  }
 
+  if (/Android/i.test(ua)) return 'android';
   return 'desktop';
 }
 
@@ -80,19 +107,15 @@ export default function InstallBanner() {
   const [visible, setVisible] = useState(false);
   const [installEvent, setInstallEvent] =
     useState<BeforeInstallPromptEvent | null>(null);
+  // Tracks whether the banner is being shown because of manual open
+  // (persistent "Save to phone" button) vs auto-reveal. Manual opens
+  // bypass the localStorage dismissal flag so the user can always
+  // bring the banner back.
+  const [manualOpen, setManualOpen] = useState(false);
 
   // Decide variant once on the client.
   useEffect(() => {
     const v = detectVariant();
-    if (v === 'none') return;
-
-    // Respect previous dismissal / install for THIS device class.
-    try {
-      if (localStorage.getItem(STORAGE_KEYS[v]) === 'dismissed') return;
-    } catch {
-      /* private mode → ignore, just show */
-    }
-
     setVariant(v);
   }, []);
 
@@ -116,22 +139,37 @@ export default function InstallBanner() {
     };
   }, []);
 
-  // 3-second delayed reveal so the banner doesn't compete with the hero.
+  // Listen for manual "open me now" requests from the header button.
+  useEffect(() => {
+    function onOpen() {
+      setManualOpen(true);
+      setVisible(true);
+    }
+    window.addEventListener(MANUAL_OPEN_EVENT, onOpen);
+    return () => window.removeEventListener(MANUAL_OPEN_EVENT, onOpen);
+  }, []);
+
+  // 3-second delayed auto-reveal. Manual opens skip this entirely.
   useEffect(() => {
     if (variant === 'none') return;
-    // For Android, only show once we actually have an install event in
-    // hand — otherwise the CTA would do nothing. If the event never
-    // arrives (e.g. Samsung Internet, FF Android), we stay hidden.
-    const shouldShow =
-      variant === 'android' ? installEvent !== null : true;
-    if (!shouldShow) return;
+    if (manualOpen) return;
+    // Respect a previous dismissal for this device class.
+    try {
+      if (localStorage.getItem(STORAGE_KEYS[variant]) === 'dismissed') return;
+    } catch {
+      /* private mode → ignore */
+    }
+    // Android: only auto-show once we have an install event in hand.
+    // Without it the CTA can't do anything, so we'd just be teasing.
+    if (variant === 'android' && installEvent === null) return;
 
     const id = window.setTimeout(() => setVisible(true), 3000);
     return () => window.clearTimeout(id);
-  }, [variant, installEvent]);
+  }, [variant, installEvent, manualOpen]);
 
   const dismiss = useCallback(() => {
     setVisible(false);
+    setManualOpen(false);
     if (variant === 'none') return;
     try {
       localStorage.setItem(STORAGE_KEYS[variant], 'dismissed');
@@ -144,8 +182,6 @@ export default function InstallBanner() {
       await installEvent.prompt();
       const { outcome } = await installEvent.userChoice;
       if (outcome === 'accepted' || outcome === 'dismissed') {
-        // Either way we stop nagging — accepted persists install,
-        // dismissed means the user said no.
         try {
           localStorage.setItem(STORAGE_KEYS.android, 'dismissed');
         } catch {}
@@ -157,8 +193,21 @@ export default function InstallBanner() {
     }
   }, [installEvent]);
 
-  // Don't even mount visuals when we're hidden — keeps the welcome
-  // screen's centered hero math stable.
+  // Open the current page in Safari via the x-safari-https:// scheme.
+  // This is Apple's officially-blessed way to hand off from a third-
+  // party iOS browser to Safari. The user lands on the same URL,
+  // already in Safari, ready to use the real Add-to-Home-Screen flow.
+  const handleOpenInSafari = useCallback(() => {
+    const here = window.location.href;
+    // Strip the protocol and rebuild with the x-safari-https:// scheme.
+    // (Works for http and https — we only ever serve https in prod.)
+    const stripped = here.replace(/^https?:\/\//, '');
+    const safariUrl = `x-safari-https://${stripped}`;
+    // Use location.href so we don't trip popup blockers; the iOS OS
+    // intercepts this scheme and opens Safari to the same page.
+    window.location.href = safariUrl;
+  }, []);
+
   if (variant === 'none' || !visible) return null;
 
   if (variant === 'android') {
@@ -173,12 +222,25 @@ export default function InstallBanner() {
     );
   }
 
-  if (variant === 'ios') {
+  if (variant === 'ios-safari') {
     return (
-      <IOSBanner
+      <IOSSafariBanner
         title={t('install.ios.title')}
         body={t('install.ios.body')}
         dismissLabel={t('install.dismiss')}
+        onDismiss={dismiss}
+      />
+    );
+  }
+
+  if (variant === 'ios-other') {
+    return (
+      <IOSOtherBanner
+        title={t('install.iosOther.title')}
+        body={t('install.iosOther.body')}
+        cta={t('install.iosOther.cta')}
+        dismissLabel={t('install.dismiss')}
+        onOpenInSafari={handleOpenInSafari}
         onDismiss={dismiss}
       />
     );
@@ -211,29 +273,16 @@ function AndroidBanner({
   dismissLabel: string;
 }) {
   return (
-    <div
-      role="dialog"
-      aria-label={cta}
-      style={sheetWrapperStyle}
-      className="animate-slide-up"
-    >
+    <div role="dialog" aria-label={cta} style={sheetWrapperStyle} className="animate-slide-up">
       <div style={sheetCardStyle}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={sheetTitleStyle}>
-            <span aria-hidden="true" style={{ marginRight: 8 }}>
-              📲
-            </span>
+            <span aria-hidden="true" style={{ marginRight: 8 }}>📲</span>
             {cta}
           </div>
           <div style={sheetSubtitleStyle}>{subtitle}</div>
         </div>
-        <button
-          type="button"
-          onClick={onInstall}
-          style={installButtonStyle}
-          aria-label={cta}
-        >
-          {/* Short label so the button doesn't wrap on narrow phones */}
+        <button type="button" onClick={onInstall} style={installButtonStyle} aria-label={cta}>
           Install
         </button>
         <button
@@ -250,10 +299,10 @@ function AndroidBanner({
 }
 
 /* ---------------------------------------------------------------- */
-/*  Variant: iOS — bottom sheet w/ animated arrow pointing down      */
+/*  Variant: iOS Safari — bottom sheet with arrow                    */
 /* ---------------------------------------------------------------- */
 
-function IOSBanner({
+function IOSSafariBanner({
   title,
   body,
   dismissLabel,
@@ -265,18 +314,11 @@ function IOSBanner({
   onDismiss: () => void;
 }) {
   return (
-    <div
-      role="dialog"
-      aria-label={title}
-      style={sheetWrapperStyle}
-      className="animate-slide-up"
-    >
+    <div role="dialog" aria-label={title} style={sheetWrapperStyle} className="animate-slide-up">
       <div style={{ ...sheetCardStyle, alignItems: 'flex-start' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={sheetTitleStyle}>
-            <span aria-hidden="true" style={{ marginRight: 8 }}>
-              📲
-            </span>
+            <span aria-hidden="true" style={{ marginRight: 8 }}>📲</span>
             {title}
           </div>
           <div style={{ ...sheetSubtitleStyle, marginTop: 4 }}>
@@ -302,9 +344,11 @@ function IOSBanner({
           ✕
         </button>
       </div>
-      {/* Animated arrow pointing toward the iOS toolbar at the bottom
-          of the viewport. Sits BELOW the card so it visually "leaves"
-          the banner and points at the OS chrome. */}
+      {/* Arrow points down toward iOS Safari's bottom toolbar where the
+          Share icon lives in iOS 15+. iOS Safari has shipped with the
+          bottom URL bar layout since 2021, so this is correct for ~99%
+          of users — the small tail of users on top-bar layout will
+          still get the message from the inline copy. */}
       <div style={arrowWrapStyle} aria-hidden="true">
         <DownArrow />
       </div>
@@ -312,9 +356,52 @@ function IOSBanner({
   );
 }
 
+/* ---------------------------------------------------------------- */
+/*  Variant: iOS Chrome / Firefox / Edge — "open in Safari" handoff  */
+/* ---------------------------------------------------------------- */
+
+function IOSOtherBanner({
+  title,
+  body,
+  cta,
+  dismissLabel,
+  onOpenInSafari,
+  onDismiss
+}: {
+  title: string;
+  body: string;
+  cta: string;
+  dismissLabel: string;
+  onOpenInSafari: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <div role="dialog" aria-label={title} style={sheetWrapperStyle} className="animate-slide-up">
+      <div style={sheetCardStyle}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={sheetTitleStyle}>
+            <span aria-hidden="true" style={{ marginRight: 8 }}>📲</span>
+            {title}
+          </div>
+          <div style={sheetSubtitleStyle}>{body}</div>
+        </div>
+        <button type="button" onClick={onOpenInSafari} style={installButtonStyle} aria-label={cta}>
+          {cta}
+        </button>
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label={dismissLabel}
+          style={closeButtonStyle}
+        >
+          ✕
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ShareGlyph() {
-  // iOS Share icon: square with arrow up. Inline SVG so it inherits
-  // currentColor and the gold accent reads against the dark sheet.
   return (
     <svg
       width="14"
@@ -350,12 +437,7 @@ function DownArrow() {
       className="animate-bounce-soft"
       style={{ display: 'block' }}
     >
-      <path
-        d="M11 2v26"
-        stroke="#C9A84C"
-        strokeWidth="2"
-        strokeLinecap="round"
-      />
+      <path d="M11 2v26" stroke="#C9A84C" strokeWidth="2" strokeLinecap="round" />
       <path
         d="M3 22l8 8 8-8"
         stroke="#C9A84C"
@@ -381,14 +463,8 @@ function DesktopBanner({
   onDismiss: () => void;
 }) {
   return (
-    <div
-      role="status"
-      style={topBarStyle}
-      className="animate-slide-down"
-    >
-      <span aria-hidden="true" style={{ marginRight: 10 }}>
-        💾
-      </span>
+    <div role="status" style={topBarStyle} className="animate-slide-down">
+      <span aria-hidden="true" style={{ marginRight: 10 }}>💾</span>
       <span style={topBarTextStyle}>{body}</span>
       <button
         type="button"
@@ -405,11 +481,6 @@ function DesktopBanner({
 /* ---------------------------------------------------------------- */
 /*  Inline styles                                                     */
 /* ---------------------------------------------------------------- */
-//
-// Inline styles (rather than Tailwind classes) so this component is
-// self-contained and the banner's brand styling can't drift if the
-// rest of the app re-themes. Colors & typography mirror the existing
-// black/gold palette + Inter UI font.
 
 const sheetWrapperStyle: React.CSSProperties = {
   position: 'fixed',
@@ -417,7 +488,7 @@ const sheetWrapperStyle: React.CSSProperties = {
   right: 12,
   bottom: 'calc(env(safe-area-inset-bottom, 0px) + 12px)',
   zIndex: 60,
-  pointerEvents: 'none' // children opt back in, so the wrapper doesn't block
+  pointerEvents: 'none'
 };
 
 const sheetCardStyle: React.CSSProperties = {
@@ -433,8 +504,7 @@ const sheetCardStyle: React.CSSProperties = {
   WebkitBackdropFilter: 'blur(18px)',
   color: '#fff',
   pointerEvents: 'auto',
-  fontFamily:
-    "var(--font-inter), Inter, system-ui, -apple-system, sans-serif"
+  fontFamily: "var(--font-inter), Inter, system-ui, -apple-system, sans-serif"
 };
 
 const sheetTitleStyle: React.CSSProperties = {
@@ -461,7 +531,8 @@ const installButtonStyle: React.CSSProperties = {
   fontSize: 13,
   border: 'none',
   cursor: 'pointer',
-  letterSpacing: 0.2
+  letterSpacing: 0.2,
+  whiteSpace: 'nowrap'
 };
 
 const closeButtonStyle: React.CSSProperties = {
@@ -485,8 +556,6 @@ const arrowWrapStyle: React.CSSProperties = {
   justifyContent: 'center',
   marginTop: 6,
   pointerEvents: 'none',
-  // Tilt slightly so the arrow looks like it's pointing at the actual
-  // share button (centered in iOS Safari's bottom toolbar).
   filter: 'drop-shadow(0 4px 8px rgba(0,0,0,0.45))'
 };
 
@@ -508,8 +577,7 @@ const topBarStyle: React.CSSProperties = {
   backdropFilter: 'blur(18px)',
   WebkitBackdropFilter: 'blur(18px)',
   color: 'rgba(255,255,255,0.92)',
-  fontFamily:
-    "var(--font-inter), Inter, system-ui, -apple-system, sans-serif",
+  fontFamily: "var(--font-inter), Inter, system-ui, -apple-system, sans-serif",
   fontSize: 13,
   letterSpacing: 0.1
 };
