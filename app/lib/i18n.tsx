@@ -65,6 +65,17 @@ const DICT = {
     en: 'Simulations are AI-generated previews and do not represent guaranteed medical outcomes. Final results vary and are determined during your consultation with a licensed practitioner.',
     fr: 'Les simulations sont des aperçus générés par IA et ne représentent pas un résultat médical garanti. Le résultat final varie selon chaque patient et est déterminé lors de votre consultation avec un médecin agréé.'
   },
+  // Brief inline disclosure shown beneath the disclaimer on the welcome
+  // screen. Required under Québec Loi 25 / PIPEDA whenever we collect
+  // any data — even anonymous geo — from a visitor.
+  'welcome.privacyConsent': {
+    en: 'By using this simulator you accept that we record anonymous usage events to recommend the right clinic and improve the service.',
+    fr: 'En utilisant ce simulateur, vous acceptez que nous enregistrions des événements d’usage anonymes pour vous recommander la bonne clinique et améliorer le service.'
+  },
+  'welcome.privacyLink': {
+    en: 'Privacy Policy',
+    fr: 'Politique de confidentialité'
+  },
 
   // ---------- Install / Save banner ----------
   // Three contextual variants: Android (PWA install prompt), iOS Safari
@@ -218,6 +229,14 @@ const DICT = {
   'clinic.locationBanner': {
     en: 'Showing clinics near {city}',
     fr: 'Cliniques à proximité de {city}'
+  },
+  // Shown above the booking card when a non-surgical patient outside the
+  // 300 km home-base radius gets routed to a partner clinic instead of
+  // Clinique Face MD. Surgical procedures and in-radius patients never
+  // see this banner.
+  'clinic.partnerReferral': {
+    en: 'Based on your location, we recommend our trusted partner clinic below.',
+    fr: 'Selon votre emplacement, nous vous recommandons notre clinique partenaire de confiance ci-dessous.'
   },
   'clinic.bookConsultation': {
     en: 'Book My Consultation →',

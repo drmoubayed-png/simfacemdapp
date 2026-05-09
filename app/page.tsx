@@ -13,9 +13,12 @@ import InstallBanner, { openInstallBanner } from './components/InstallBanner';
 import {
   CLINICS,
   formatDistance,
+  resolveBookingClinic,
   sortClinicsByDistance,
-  type Clinic
+  type Clinic,
+  type RoutingDecision
 } from './lib/clinics';
+import { trackEvent, getSessionId } from './lib/track';
 import { useLocation } from './lib/useLocation';
 import {
   formatPrice,
@@ -306,6 +309,15 @@ function WelcomeScreen({ onStart }: { onStart: () => void }) {
           style={{ color: 'rgba(255,255,255,0.4)' }}
         >
           {t('welcome.disclaimer')}
+        </p>
+        <p
+          className="text-[10px] text-center leading-relaxed pt-3"
+          style={{ color: 'rgba(255,255,255,0.32)' }}
+        >
+          {t('welcome.privacyConsent')}{' '}
+          <a href="/privacy" style={{ color: '#C9A84C', textDecoration: 'underline' }}>
+            {t('welcome.privacyLink')}
+          </a>
         </p>
       </div>
 
@@ -1196,6 +1208,15 @@ function ResultContent({
   onReset: () => void;
 }) {
   const { t } = useI18n();
+
+  // One "simulation_completed" event per result render. This is the top
+  // of the analytics funnel — every other event (share, book) is a child
+  // of a completed simulation. Re-fires only if the procedure changes.
+  useEffect(() => {
+    trackEvent('simulation_completed', { procedure_id: procedure.id });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [procedure.id]);
+
   return (
     <div className="flex-1 flex flex-col">
       <h2
@@ -1231,7 +1252,7 @@ function ResultContent({
 
       <PriceBox procedure={procedure} />
 
-      <ClinicSection />
+      <ClinicSection procedure={procedure} />
 
       <p
         className="text-[11px] text-center leading-relaxed mt-6"
@@ -1514,12 +1535,39 @@ function PriceBox({ procedure }: { procedure: Procedure }) {
   );
 }
 
-function ClinicSection() {
+function ClinicSection({ procedure }: { procedure: Procedure }) {
   const { t } = useI18n();
   const { location, requestPreciseLocation } = useLocation();
   const [showAll, setShowAll] = useState(false);
   const [requestingPrecise, setRequestingPrecise] = useState(false);
 
+  // The single source of truth for which clinic this patient should book
+  // with — surgical always goes to the home base; non-surgical inside the
+  // 300 km radius does too; non-surgical outside the radius routes to the
+  // nearest active partner that offers the requested treatment.
+  const decision: RoutingDecision = useMemo(
+    () =>
+      resolveBookingClinic(
+        procedure.id,
+        location ? { lat: location.lat, lng: location.lng } : null
+      ),
+    [procedure.id, location]
+  );
+
+  // Fire a one-shot "booking_shown" event whenever we have a decision +
+  // a session — so we can measure how often each clinic is offered, even
+  // if the user never clicks Book. Re-fires if the decision changes
+  // (e.g., user grants precise GPS and we re-route them to a partner).
+  useEffect(() => {
+    trackEvent('booking_shown', {
+      procedure_id: procedure.id,
+      clinic_id: decision.clinic.id,
+      routing_reason: decision.reason,
+      distance_km: decision.distanceKm ?? null
+    });
+  }, [decision.clinic.id, decision.reason, procedure.id, decision.distanceKm]);
+
+  // Legacy "see other locations" list — only meaningful once partners exist
   const ranked = useMemo(
     () =>
       sortClinicsByDistance(
@@ -1527,12 +1575,10 @@ function ClinicSection() {
       ),
     [location]
   );
-
-  const nearest = ranked[0];
-  const others = ranked.slice(1);
+  const others = ranked.filter((c) => c.id !== decision.clinic.id);
   const hasOthers = others.length > 0;
 
-  if (!nearest) return null;
+  const isPartnerReferral = decision.reason === 'nearest_partner';
 
   // Banner text — only show if we successfully detected a city
   const locationLabel = location?.city
@@ -1571,10 +1617,26 @@ function ClinicSection() {
         </div>
       )}
 
+      {isPartnerReferral && (
+        <div
+          className="mb-3 px-3 py-2 text-[12px] leading-relaxed"
+          style={{
+            color: '#C9A84C',
+            background: 'rgba(201,168,76,0.07)',
+            border: '1px solid rgba(201,168,76,0.25)',
+            borderRadius: 10
+          }}
+        >
+          {t('clinic.partnerReferral')}
+        </div>
+      )}
+
       <ClinicCard
-        clinic={nearest}
+        clinic={decision.clinic}
         primary
-        distanceKm={nearest.distanceKm}
+        distanceKm={decision.distanceKm ?? undefined}
+        procedureId={procedure.id}
+        routingReason={decision.reason}
       />
 
       {hasOthers && (
@@ -1628,13 +1690,43 @@ function ClinicSection() {
 function ClinicCard({
   clinic,
   primary,
-  distanceKm
+  distanceKm,
+  procedureId,
+  routingReason
 }: {
   clinic: Clinic;
   primary?: boolean;
   distanceKm?: number;
+  /** When provided, Book and Website clicks are instrumented for analytics. */
+  procedureId?: ProcedureId;
+  /** Mirrors RoutingDecision.reason — lets us tag clicks as referrals. */
+  routingReason?: RoutingDecision['reason'];
 }) {
   const { t } = useI18n();
+
+  // Wrap external-link clicks so the lead-tracking endpoint sees them. We
+  // dispatch the event but DO NOT await it — the new tab opens instantly.
+  const handleBook = () => {
+    if (procedureId) {
+      trackEvent('book_clicked', {
+        procedure_id: procedureId,
+        clinic_id: clinic.id,
+        routing_reason: routingReason ?? null,
+        distance_km: typeof distanceKm === 'number' ? distanceKm : null
+      });
+    }
+    window.open(clinic.bookingUrl, '_blank');
+  };
+  const handleWebsite = () => {
+    if (procedureId) {
+      trackEvent('website_clicked', {
+        procedure_id: procedureId,
+        clinic_id: clinic.id,
+        routing_reason: routingReason ?? null
+      });
+    }
+    window.open(clinic.websiteUrl, '_blank');
+  };
   return (
     <div
       style={{
@@ -1702,7 +1794,7 @@ function ClinicCard({
       <div className={`mt-${primary ? 5 : 4} space-y-2.5`}>
         <button
           className={primary ? 'btn-primary' : 'btn-secondary'}
-          onClick={() => window.open(clinic.bookingUrl, '_blank')}
+          onClick={handleBook}
           style={!primary ? { minHeight: 44, fontSize: 14 } : undefined}
         >
           {t('clinic.bookConsultation')}
@@ -1710,7 +1802,7 @@ function ClinicCard({
         {primary && (
           <button
             className="btn-secondary"
-            onClick={() => window.open(clinic.websiteUrl, '_blank')}
+            onClick={handleWebsite}
           >
             {t('clinic.visitWebsite', {
               host: new URL(clinic.websiteUrl).hostname.replace('www.', '')
@@ -2061,6 +2153,7 @@ function ActionRow({
   // so the user has both pieces ready to paste somewhere.
   const handleNativeShare = async () => {
     setBusy('share');
+    trackEvent('share_clicked', { procedure_id: procedure.id, channel: 'native' });
     try {
       const file = await getComposite();
       const shareData: ShareData = {
@@ -2122,6 +2215,7 @@ function ActionRow({
   // ——— Download the watermarked JPEG.
   const handleDownload = async () => {
     setBusy('download');
+    trackEvent('share_clicked', { procedure_id: procedure.id, channel: 'download' });
     try {
       const file = await getComposite();
       const url = URL.createObjectURL(file);
@@ -2146,6 +2240,7 @@ function ActionRow({
   // pre-fill the message text. The user pastes the image in the chat.
   const handleWhatsApp = async () => {
     setBusy('wa');
+    trackEvent('share_clicked', { procedure_id: procedure.id, channel: 'whatsapp' });
     try {
       // Copy image to clipboard for paste-into-chat (Chrome/Edge desktop, some Android).
       let copiedImage = false;
@@ -2181,6 +2276,7 @@ function ActionRow({
   // tells them how to attach it.
   const handleInstagram = async () => {
     setBusy('ig');
+    trackEvent('share_clicked', { procedure_id: procedure.id, channel: 'instagram' });
     try {
       const file = await getComposite();
       const shareData: ShareData = {
