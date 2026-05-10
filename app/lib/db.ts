@@ -69,8 +69,106 @@ export async function ensureSchema(): Promise<void> {
     await sql`CREATE INDEX IF NOT EXISTS leads_event_name_idx ON leads (event_name);`;
     await sql`CREATE INDEX IF NOT EXISTS leads_clinic_id_idx ON leads (clinic_id);`;
     await sql`CREATE INDEX IF NOT EXISTS leads_session_id_idx ON leads (session_id);`;
+
+    // ---- v5.1 lead_unlocks: PII-bearing rows from the result-screen gate ----
+    // Separate table so the event firehose (`leads`) stays anonymous and the
+    // PII rows can be access-controlled, exported, or purged independently.
+    await sql`
+      CREATE TABLE IF NOT EXISTS lead_unlocks (
+        id BIGSERIAL PRIMARY KEY,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+        -- Stitch back to the anonymous event funnel.
+        session_id TEXT NOT NULL,
+
+        -- Source of the lead: 'google' (verified OAuth) or 'manual' (form).
+        source TEXT NOT NULL,
+
+        -- Identity — verified for google, self-attested for manual.
+        first_name TEXT,
+        last_name TEXT,
+        email TEXT,
+        phone TEXT,         -- E.164-ish, NA-only for now
+        google_sub TEXT,    -- stable Google account id when source='google'
+        email_verified BOOLEAN NOT NULL DEFAULT FALSE,
+
+        -- What they were looking at when they unlocked.
+        procedure_id TEXT,
+        clinic_id TEXT,
+        routing_reason TEXT,
+        distance_km DOUBLE PRECISION,
+
+        -- Coarse geo from request headers - same as the leads table.
+        ip_city TEXT,
+        ip_region TEXT,
+        ip_country TEXT,
+
+        -- Misc context.
+        consent_text_version TEXT, -- e.g. 'v5.1' so we can prove what they agreed to
+        referrer TEXT,
+        lang TEXT
+      );
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS lead_unlocks_created_at_idx ON lead_unlocks (created_at DESC);`;
+    await sql`CREATE INDEX IF NOT EXISTS lead_unlocks_email_idx ON lead_unlocks (email);`;
+    await sql`CREATE INDEX IF NOT EXISTS lead_unlocks_session_id_idx ON lead_unlocks (session_id);`;
   })();
   return schemaReady;
+}
+
+/**
+ * Insert a unlock-row from the lead gate. Returns the row id so the
+ * client can stash it in localStorage as proof of unlock.
+ */
+export async function insertLeadUnlock(row: {
+  session_id: string;
+  source: 'google' | 'manual';
+  first_name?: string | null;
+  last_name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  google_sub?: string | null;
+  email_verified?: boolean;
+  procedure_id?: string | null;
+  clinic_id?: string | null;
+  routing_reason?: string | null;
+  distance_km?: number | null;
+  ip_city?: string | null;
+  ip_region?: string | null;
+  ip_country?: string | null;
+  consent_text_version?: string | null;
+  referrer?: string | null;
+  lang?: string | null;
+}): Promise<number> {
+  await ensureSchema();
+  const r = await sql<{ id: number }>`
+    INSERT INTO lead_unlocks (
+      session_id, source, first_name, last_name, email, phone, google_sub,
+      email_verified, procedure_id, clinic_id, routing_reason, distance_km,
+      ip_city, ip_region, ip_country, consent_text_version, referrer, lang
+    ) VALUES (
+      ${row.session_id},
+      ${row.source},
+      ${row.first_name ?? null},
+      ${row.last_name ?? null},
+      ${row.email ?? null},
+      ${row.phone ?? null},
+      ${row.google_sub ?? null},
+      ${row.email_verified ?? false},
+      ${row.procedure_id ?? null},
+      ${row.clinic_id ?? null},
+      ${row.routing_reason ?? null},
+      ${row.distance_km ?? null},
+      ${row.ip_city ?? null},
+      ${row.ip_region ?? null},
+      ${row.ip_country ?? null},
+      ${row.consent_text_version ?? null},
+      ${row.referrer ?? null},
+      ${row.lang ?? null}
+    )
+    RETURNING id;
+  `;
+  return r.rows[0].id;
 }
 
 /**

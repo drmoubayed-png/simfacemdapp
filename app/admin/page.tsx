@@ -35,6 +35,25 @@ type GeoBucket = {
   country: string | null;
   count: number;
 };
+type UnlockRow = {
+  created_at: string;
+  source: string;
+  first_name: string | null;
+  last_name: string | null;
+  email: string | null;
+  phone: string | null;
+  email_verified: boolean;
+  procedure_id: string | null;
+  clinic_id: string | null;
+  clinic_name: string | null;
+  routing_reason: string | null;
+  distance_km: number | null;
+  ip_city: string | null;
+  ip_region: string | null;
+  ip_country: string | null;
+  session_id: string;
+  lang: string | null;
+};
 type FullReport = {
   range: { start: string; end: string; label: string };
   totals: {
@@ -43,9 +62,11 @@ type FullReport = {
     book_clicks_unique_leads: number;
     book_clicks_raw: number;
     shares: number;
+    unlocks: number;
   };
   by_clinic: ClinicLeadStats[];
   top_cities: GeoBucket[];
+  unlock_rows: UnlockRow[];
 };
 
 const KEY_STORAGE = 'simfacemd:admin_key';
@@ -123,6 +144,13 @@ export default function AdminPage() {
     const startIso = new Date(start + 'T00:00:00').toISOString();
     const endIso = new Date(end + 'T23:59:59.999').toISOString();
     const url = `/api/admin/leads.csv?start=${encodeURIComponent(startIso)}&end=${encodeURIComponent(endIso)}&key=${encodeURIComponent(adminKey)}`;
+    window.open(url, '_blank');
+  };
+
+  const handleDownloadUnlocksCsv = () => {
+    const startIso = new Date(start + 'T00:00:00').toISOString();
+    const endIso = new Date(end + 'T23:59:59.999').toISOString();
+    const url = `/api/admin/unlocks.csv?start=${encodeURIComponent(startIso)}&end=${encodeURIComponent(endIso)}&key=${encodeURIComponent(adminKey)}`;
     window.open(url, '_blank');
   };
 
@@ -290,7 +318,23 @@ export default function AdminPage() {
               cursor: 'pointer'
             }}
           >
-            Download leads.csv
+            Events CSV
+          </button>
+          <button
+            onClick={handleDownloadUnlocksCsv}
+            style={{
+              background: '#C9A84C',
+              color: '#000',
+              border: 'none',
+              borderRadius: 8,
+              padding: '10px 16px',
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: 'pointer'
+            }}
+            title="Identified leads with name / email / phone (PII)"
+          >
+            Identified leads CSV
           </button>
           {[
             { label: 'Yesterday', s: daysAgoStr(1), e: daysAgoStr(1) },
@@ -349,15 +393,22 @@ export default function AdminPage() {
               }}
             >
               <Kpi label="Simulations" value={report.totals.simulations_completed} />
+              <Kpi
+                label="Identified leads"
+                value={report.totals.unlocks ?? 0}
+                highlight
+              />
               <Kpi label="Bookings shown" value={report.totals.bookings_shown} />
               <Kpi
-                label="Unique leads"
+                label="Book clicks"
                 value={report.totals.book_clicks_unique_leads}
-                highlight
               />
               <Kpi label="Shares" value={report.totals.shares} />
               <Kpi label="Conversion" value={conv + '%'} />
             </div>
+
+            <SectionTitle>Identified leads (name, email, phone)</SectionTitle>
+            <UnlocksTable rows={report.unlock_rows ?? []} />
 
             <SectionTitle>By clinic</SectionTitle>
             <div
@@ -586,4 +637,180 @@ function PartnerTag() {
       PARTNER
     </span>
   );
+}
+
+/**
+ * Identified leads table — the call list. Sorted newest-first so the
+ * most recent lead is at the top of the screen when the operator opens
+ * the dashboard. Tap email/phone to copy / call directly on mobile.
+ */
+function UnlocksTable({ rows }: { rows: UnlockRow[] }) {
+  if (!rows || rows.length === 0) {
+    return (
+      <div
+        style={{
+          background: '#141414',
+          border: '1px dashed #2a2a2a',
+          borderRadius: 12,
+          padding: '20px 16px',
+          color: 'rgba(255,255,255,0.5)',
+          fontSize: 13,
+          marginBottom: 32,
+          textAlign: 'center'
+        }}
+      >
+        No identified leads in this date range yet.
+      </div>
+    );
+  }
+  // Newest first.
+  const sorted = [...rows].sort((a, b) =>
+    a.created_at < b.created_at ? 1 : -1
+  );
+  return (
+    <div
+      style={{
+        background: '#141414',
+        border: '1px solid #2a2a2a',
+        borderRadius: 12,
+        overflow: 'auto',
+        marginBottom: 32
+      }}
+    >
+      <table
+        style={{
+          width: '100%',
+          borderCollapse: 'collapse',
+          fontSize: 13,
+          minWidth: 720
+        }}
+      >
+        <thead>
+          <tr
+            style={{
+              color: 'rgba(255,255,255,0.5)',
+              fontSize: 11,
+              textTransform: 'uppercase',
+              letterSpacing: '0.12em'
+            }}
+          >
+            <th align="left" style={thStyle}>When</th>
+            <th align="left" style={thStyle}>Name</th>
+            <th align="left" style={thStyle}>Email</th>
+            <th align="left" style={thStyle}>Phone</th>
+            <th align="left" style={thStyle}>Procedure</th>
+            <th align="left" style={thStyle}>Routed to</th>
+            <th align="left" style={thStyle}>Where</th>
+            <th align="left" style={thStyle}>Source</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((r, i) => {
+            const name = [r.first_name, r.last_name].filter(Boolean).join(' ') || '—';
+            const where =
+              [r.ip_city, r.ip_region, r.ip_country].filter(Boolean).join(', ') || '—';
+            return (
+              <tr key={`${r.created_at}-${i}`}>
+                <td style={tdStyle}>
+                  {formatLocalDateTime(r.created_at)}
+                </td>
+                <td style={tdStyle}>
+                  <strong>{name}</strong>
+                  {r.email_verified && (
+                    <span
+                      title="Email verified by Google"
+                      style={{ marginLeft: 6, color: '#1a73e8' }}
+                    >
+                      ✓
+                    </span>
+                  )}
+                </td>
+                <td style={tdStyle}>
+                  {r.email ? (
+                    <a
+                      href={`mailto:${r.email}`}
+                      style={{ color: '#fff', textDecoration: 'underline' }}
+                    >
+                      {r.email}
+                    </a>
+                  ) : (
+                    '—'
+                  )}
+                </td>
+                <td style={tdStyle}>
+                  {r.phone ? (
+                    <a
+                      href={`tel:${r.phone}`}
+                      style={{ color: '#fff', textDecoration: 'underline' }}
+                    >
+                      {r.phone}
+                    </a>
+                  ) : (
+                    '—'
+                  )}
+                </td>
+                <td style={{ ...tdStyle, color: 'rgba(255,255,255,0.85)' }}>
+                  {r.procedure_id ?? '—'}
+                </td>
+                <td style={{ ...tdStyle, color: 'rgba(255,255,255,0.7)' }}>
+                  {r.clinic_name ?? r.clinic_id ?? '—'}
+                </td>
+                <td style={{ ...tdStyle, color: 'rgba(255,255,255,0.65)' }}>
+                  {where}
+                </td>
+                <td style={tdStyle}>
+                  {r.source === 'google' ? (
+                    <span
+                      style={{
+                        background: '#1a73e8',
+                        color: '#fff',
+                        padding: '2px 6px',
+                        borderRadius: 4,
+                        fontSize: 10,
+                        fontWeight: 700,
+                        letterSpacing: '0.06em'
+                      }}
+                    >
+                      GOOGLE
+                    </span>
+                  ) : (
+                    <span style={{ color: 'rgba(255,255,255,0.55)' }}>form</span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+const thStyle: React.CSSProperties = {
+  padding: '10px 14px',
+  fontWeight: 500,
+  borderBottom: '1px solid #2a2a2a',
+  whiteSpace: 'nowrap'
+};
+const tdStyle: React.CSSProperties = {
+  padding: '10px 14px',
+  borderBottom: '1px solid #1d1d1d',
+  whiteSpace: 'nowrap',
+  verticalAlign: 'top'
+};
+
+function formatLocalDateTime(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString('en-CA', {
+      timeZone: 'America/Toronto',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    });
+  } catch {
+    return iso.slice(0, 16).replace('T', ' ');
+  }
 }

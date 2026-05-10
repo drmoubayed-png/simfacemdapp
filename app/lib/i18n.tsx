@@ -77,6 +77,79 @@ const DICT = {
     fr: 'Politique de confidentialité'
   },
 
+  // ---------- Welcome consent gate (v5.1) ----------
+  // Mandatory checkbox above the Start button. Disables the CTA until
+  // checked. Drafted to satisfy Loi 25 + PIPEDA (explicit informed consent
+  // with stated purposes, third-party sharing, and withdrawal right).
+  'welcome.consent.text': {
+    en:
+      'By proceeding, I consent to my uploaded photo being processed to generate an AI-powered facial simulation. My name, contact information, and technical data (including approximate location) may be collected and used to deliver my results and send me relevant treatment information. I may withdraw my consent at any time. In accordance with Quebec Law, PIPEDA, and applicable international privacy laws, your data is stored securely and never sold to third parties.',
+    fr:
+      'En continuant, je consens à ce que ma photo soit traitée pour générer une simulation faciale par intelligence artificielle. Mon nom, mes coordonnées et certaines données techniques (dont ma localisation approximative) peuvent être recueillis et utilisés pour me transmettre mes résultats et m’envoyer de l’information pertinente sur les traitements. Je peux retirer mon consentement à tout moment. Conformément à la Loi 25 du Québec, à la LPRPDE et aux lois internationales applicables sur la vie privée, vos données sont conservées de façon sécuritaire et ne sont jamais vendues à des tiers.'
+  },
+  'welcome.consent.required': {
+    en: 'Please accept the consent above to continue.',
+    fr: 'Veuillez accepter le consentement ci-dessus pour continuer.'
+  },
+
+  // ---------- Lead gate (v5.1) — modal that locks the result ----------
+  'gate.title': {
+    en: 'Your simulation is ready! 🎉',
+    fr: 'Votre simulation est prête ! 🎉'
+  },
+  'gate.subtitle': {
+    en: 'Sign in or enter your details to unlock your full results.',
+    fr: 'Connectez-vous ou entrez vos coordonnées pour débloquer votre résultat complet.'
+  },
+  'gate.continueGoogle': { en: 'Continue with Google', fr: 'Continuer avec Google' },
+  'gate.or': { en: 'or', fr: 'ou' },
+  'gate.firstName': { en: 'First Name', fr: 'Prénom' },
+  'gate.email': { en: 'Email Address', fr: 'Courriel' },
+  'gate.phone': { en: 'Phone Number', fr: 'Numéro de téléphone' },
+  'gate.unlock': { en: 'Unlock my result', fr: 'Débloquer mon résultat' },
+  'gate.submitting': { en: 'Unlocking…', fr: 'Déverrouillage…' },
+  'gate.errorRequired': {
+    en: 'Please fill in all fields.',
+    fr: 'Veuillez remplir tous les champs.'
+  },
+  'gate.errorEmail': {
+    en: 'Please enter a valid email address.',
+    fr: 'Veuillez entrer une adresse courriel valide.'
+  },
+  'gate.errorPhone': {
+    en: 'Please enter a valid 10-digit North American phone number.',
+    fr: 'Veuillez entrer un numéro de téléphone nord-américain à 10 chiffres.'
+  },
+  'gate.errorGeneric': {
+    en: 'Something went wrong. Please try again.',
+    fr: 'Une erreur est survenue. Veuillez réessayer.'
+  },
+  'gate.legalFootnote': {
+    en: 'Your information is stored securely and never sold. See our Privacy Policy.',
+    fr: 'Vos renseignements sont conservés de façon sécuritaire et ne sont jamais vendus. Voir la Politique de confidentialité.'
+  },
+
+  // ---------- Daily simulation cap (v5.1.1) ----------
+  // Visitors get up to 4 simulations per calendar day (America/Toronto).
+  // The 5th attempt is blocked with this message on the welcome screen.
+  'limit.title': {
+    en: 'Daily limit reached',
+    fr: 'Limite quotidienne atteinte'
+  },
+  'limit.body': {
+    en: 'You’ve used your 4 simulations for today. Please come back tomorrow to try another procedure.',
+    fr: 'Vous avez utilisé vos 4 simulations pour aujourd’hui. Revenez demain pour essayer une autre procédure.'
+  },
+  'limit.bookCta': {
+    en: 'Book a real consultation',
+    fr: 'Réserver une consultation'
+  },
+  // Tiny counter shown on the result screen footer, e.g. "Simulation 2 of 4 today".
+  'limit.counter': {
+    en: 'Simulation {n} of {max} today',
+    fr: 'Simulation {n} sur {max} aujourd’hui'
+  },
+
   // ---------- Install / Save banner ----------
   // Three contextual variants: Android (PWA install prompt), iOS Safari
   // (manual instructions w/ Share button), and desktop (bookmark hint).

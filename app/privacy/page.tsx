@@ -21,7 +21,9 @@ import { useI18n } from '../lib/i18n';
 export default function PrivacyPage() {
   const { lang } = useI18n();
   const isFr = lang === 'fr';
-  const updated = '2026-05-09';
+  // Bumped when the policy text materially changes (e.g. v5.1 added the
+  // identified-leads gate that captures name/email/phone).
+  const updated = '2026-05-10';
 
   return (
     <main
@@ -75,10 +77,13 @@ function EnglishPolicy() {
     <>
       <Section title="In plain English">
         <p>
-          SimFaceMD is operated by Clinique Face MD (Montr\u00e9al, Qu\u00e9bec). We
-          do not require an account. We do not ask for your name, email,
-          or phone number. The simulation runs in your browser; nothing
-          you do here is tied to your real identity.
+          SimFaceMD is operated by Clinique Face MD (Montr\u00e9al, Qu\u00e9bec).
+          The simulation itself is anonymous. To unlock your full result
+          and receive a follow-up, we ask for your first name, email, and
+          phone number \u2014 either through Google sign-in or a short form.
+          That is the only personal information we collect, and we use it
+          only to deliver your result and contact you about your
+          consultation.
         </p>
       </Section>
 
@@ -90,13 +95,20 @@ function EnglishPolicy() {
           store your photos on our servers.
         </p>
         <p>
+          <strong style={{ color: '#FFFFFF' }}>Identity at unlock time.</strong>{' '}
+          To reveal your full result, you either sign in with Google
+          (we receive your name and verified email) or fill in the short
+          form (first name, email, phone number). We store this together
+          with the procedure you simulated, the date and time, and an
+          approximate city/region/country derived from your IP. This is
+          our \u201Cidentified lead\u201D record.
+        </p>
+        <p>
           <strong style={{ color: '#FFFFFF' }}>Anonymous usage events.</strong>{' '}
-          When you complete a simulation, view a clinic recommendation,
-          click \u201CBook My Consultation,\u201D or share a result, we record an
-          event with: a random per-tab session ID, the procedure
-          simulated, the clinic shown, and an approximate city/region/
-          country derived from your IP address (we do NOT store the IP
-          itself).
+          Independently of the unlock, we also record anonymous events
+          (simulation completed, clinic shown, share clicked, book
+          clicked) tied only to a random per-tab session ID. No name,
+          email, or phone number is attached to these.
         </p>
         <p>
           <strong style={{ color: '#FFFFFF' }}>Optional precise location.</strong>{' '}
@@ -108,11 +120,10 @@ function EnglishPolicy() {
 
       <Section title="What we do NOT collect">
         <ul className="list-disc pl-5 space-y-1">
-          <li>Your name, email, or phone number</li>
           <li>Your IP address (used at request time, never stored)</li>
-          <li>Cookies or persistent identifiers across sessions</li>
+          <li>Persistent advertising cookies or third-party tracking pixels</li>
           <li>Any health information or medical history</li>
-          <li>Tracking pixels from advertising networks</li>
+          <li>Government IDs, payment cards, or biometric templates</li>
         </ul>
       </Section>
 
@@ -192,10 +203,13 @@ function FrenchPolicy() {
       <Section title="En clair">
         <p>
           SimFaceMD est exploit\u00e9 par Clinique Face MD (Montr\u00e9al, Qu\u00e9bec).
-          Aucun compte requis. Nous ne demandons ni votre nom, ni votre
-          courriel, ni votre num\u00e9ro de t\u00e9l\u00e9phone. La simulation se
-          d\u00e9roule dans votre navigateur; rien ici n\u2019est li\u00e9 \u00e0 votre
-          identit\u00e9 r\u00e9elle.
+          La simulation elle-m\u00eame est anonyme. Pour d\u00e9bloquer votre
+          r\u00e9sultat complet et recevoir un suivi, nous vous demandons votre
+          pr\u00e9nom, votre courriel et votre num\u00e9ro de t\u00e9l\u00e9phone \u2014 soit par
+          la connexion Google, soit par un bref formulaire. Ce sont les
+          seuls renseignements personnels que nous recueillons, et nous
+          les utilisons uniquement pour vous transmettre votre r\u00e9sultat
+          et communiquer avec vous au sujet de votre consultation.
         </p>
       </Section>
 
@@ -207,14 +221,22 @@ function FrenchPolicy() {
           n\u2019entreposons pas vos photos sur nos serveurs.
         </p>
         <p>
+          <strong style={{ color: '#FFFFFF' }}>Identit\u00e9 au moment du d\u00e9verrouillage.</strong>{' '}
+          Pour r\u00e9v\u00e9ler votre r\u00e9sultat complet, vous vous connectez avec
+          Google (nous recevons votre nom et votre courriel v\u00e9rifi\u00e9) ou
+          remplissez le bref formulaire (pr\u00e9nom, courriel, t\u00e9l\u00e9phone).
+          Nous conservons ces renseignements avec la proc\u00e9dure simul\u00e9e,
+          la date et l\u2019heure ainsi qu\u2019une ville/province/pays approximatifs
+          d\u00e9duits de votre adresse IP. Il s\u2019agit de notre fiche \u00ab lead
+          identifi\u00e9 \u00bb.
+        </p>
+        <p>
           <strong style={{ color: '#FFFFFF' }}>\u00c9v\u00e9nements d\u2019usage anonymes.</strong>{' '}
-          Lorsque vous terminez une simulation, voyez une recommandation
-          de clinique, cliquez \u00ab R\u00e9server ma consultation \u00bb ou partagez
-          un r\u00e9sultat, nous enregistrons un \u00e9v\u00e9nement contenant : un
-          identifiant de session al\u00e9atoire (par onglet), la proc\u00e9dure
-          simul\u00e9e, la clinique propos\u00e9e, ainsi qu\u2019une ville/province/
-          pays approximatifs d\u00e9duits de votre adresse IP (nous
-          n\u2019entreposons PAS l\u2019adresse IP elle-m\u00eame).
+          Ind\u00e9pendamment du d\u00e9verrouillage, nous enregistrons aussi des
+          \u00e9v\u00e9nements anonymes (simulation termin\u00e9e, clinique propos\u00e9e,
+          partage cliqu\u00e9, r\u00e9servation cliqu\u00e9e) li\u00e9s uniquement \u00e0 un
+          identifiant de session al\u00e9atoire (par onglet). Aucun nom,
+          courriel ni t\u00e9l\u00e9phone n\u2019y est rattach\u00e9.
         </p>
         <p>
           <strong style={{ color: '#FFFFFF' }}>Localisation pr\u00e9cise (facultative).</strong>{' '}
@@ -227,11 +249,10 @@ function FrenchPolicy() {
 
       <Section title="Ce que nous ne recueillons PAS">
         <ul className="list-disc pl-5 space-y-1">
-          <li>Votre nom, courriel ou num\u00e9ro de t\u00e9l\u00e9phone</li>
           <li>Votre adresse IP (utilis\u00e9e \u00e0 la r\u00e9ception, jamais stock\u00e9e)</li>
-          <li>Cookies ou identifiants persistants entre les sessions</li>
+          <li>Cookies publicitaires persistants ou pixels de pistage tiers</li>
           <li>Information de sant\u00e9 ou ant\u00e9c\u00e9dents m\u00e9dicaux</li>
-          <li>Pixels publicitaires de r\u00e9seaux tiers</li>
+          <li>Pi\u00e8ces d\u2019identit\u00e9, cartes de paiement ou gabarits biom\u00e9triques</li>
         </ul>
       </Section>
 

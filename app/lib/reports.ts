@@ -51,11 +51,35 @@ export type FullReport = {
     book_clicks_unique_leads: number;
     book_clicks_raw: number;
     shares: number;
+    /** v5.1 — lead-gate unlocks (PII rows). */
+    unlocks: number;
   };
   by_clinic: ClinicLeadStats[];
   top_cities: GeoBucket[];
   /** Per-lead detail rows for CSV / partner billing. */
   lead_rows: LeadRow[];
+  /** v5.1 — lead-gate unlock rows. */
+  unlock_rows: UnlockRow[];
+};
+
+export type UnlockRow = {
+  created_at: string;
+  source: string;
+  first_name: string | null;
+  last_name: string | null;
+  email: string | null;
+  phone: string | null;
+  email_verified: boolean;
+  procedure_id: string | null;
+  clinic_id: string | null;
+  clinic_name: string | null;
+  routing_reason: string | null;
+  distance_km: number | null;
+  ip_city: string | null;
+  ip_region: string | null;
+  ip_country: string | null;
+  session_id: string;
+  lang: string | null;
 };
 
 export type LeadRow = {
@@ -159,7 +183,8 @@ export async function buildReport(range: ReportRange): Promise<FullReport> {
     bookings_shown: 0,
     book_clicks_unique_leads: 0,
     book_clicks_raw: 0,
-    shares: 0
+    shares: 0,
+    unlocks: 0
   };
   for (const r of totalsRes.rows) {
     const n = Number(r.n) || 0;
@@ -287,12 +312,106 @@ export async function buildReport(range: ReportRange): Promise<FullReport> {
     session_id: r.session_id as string
   }));
 
-  return { range, totals, by_clinic, top_cities, lead_rows };
+  // ---- v5.1: lead-gate unlocks (PII rows) ----
+  const unlocksRes = await sql`
+    SELECT
+      created_at, source, first_name, last_name, email, phone, email_verified,
+      procedure_id, clinic_id, routing_reason, distance_km,
+      ip_city, ip_region, ip_country, session_id, lang
+    FROM lead_unlocks
+    WHERE created_at >= ${start} AND created_at < ${end}
+    ORDER BY created_at ASC;
+  `;
+  const unlock_rows: UnlockRow[] = unlocksRes.rows.map((r) => ({
+    created_at:
+      r.created_at instanceof Date
+        ? r.created_at.toISOString()
+        : String(r.created_at),
+    source: String(r.source ?? ''),
+    first_name: r.first_name as string | null,
+    last_name: r.last_name as string | null,
+    email: r.email as string | null,
+    phone: r.phone as string | null,
+    email_verified: Boolean(r.email_verified),
+    procedure_id: r.procedure_id as string | null,
+    clinic_id: r.clinic_id as string | null,
+    clinic_name: nameForClinic(r.clinic_id as string | null),
+    routing_reason: r.routing_reason as string | null,
+    distance_km: r.distance_km == null ? null : Number(r.distance_km),
+    ip_city: r.ip_city as string | null,
+    ip_region: r.ip_region as string | null,
+    ip_country: r.ip_country as string | null,
+    session_id: r.session_id as string,
+    lang: r.lang as string | null
+  }));
+  totals.unlocks = unlock_rows.length;
+
+  return { range, totals, by_clinic, top_cities, lead_rows, unlock_rows };
 }
 
 /* ------------------------------------------------------------------ */
 /*  CSV serialization                                                 */
 /* ------------------------------------------------------------------ */
+
+/**
+ * v5.1 — CSV for the lead-gate PII rows. Separate from leadsToCsv so
+ * the operator can grant different access (e.g. share book-click events
+ * with partners while keeping the PII export internal).
+ */
+export function unlocksToCsv(rows: UnlockRow[]): string {
+  const headers = [
+    'created_at',
+    'source',
+    'first_name',
+    'last_name',
+    'email',
+    'phone',
+    'email_verified',
+    'procedure_id',
+    'clinic_id',
+    'clinic_name',
+    'routing_reason',
+    'distance_km',
+    'ip_city',
+    'ip_region',
+    'ip_country',
+    'lang',
+    'session_id'
+  ];
+  const escape = (v: unknown): string => {
+    if (v === null || v === undefined) return '';
+    const s = String(v);
+    if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  };
+  const lines = [headers.join(',')];
+  for (const r of rows) {
+    lines.push(
+      [
+        r.created_at,
+        r.source,
+        r.first_name,
+        r.last_name,
+        r.email,
+        r.phone,
+        r.email_verified,
+        r.procedure_id,
+        r.clinic_id,
+        r.clinic_name,
+        r.routing_reason,
+        r.distance_km,
+        r.ip_city,
+        r.ip_region,
+        r.ip_country,
+        r.lang,
+        r.session_id
+      ]
+        .map(escape)
+        .join(',')
+    );
+  }
+  return lines.join('\n');
+}
 
 export function leadsToCsv(rows: LeadRow[]): string {
   const headers = [
@@ -405,11 +524,14 @@ export function reportToHtml(report: FullReport): string {
 
   <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:28px">
     ${kpi('Simulations', totals.simulations_completed)}
+    ${kpi('Identified leads', totals.unlocks, '#C9A84C')}
     ${kpi('Bookings shown', totals.bookings_shown)}
-    ${kpi('Unique leads', totals.book_clicks_unique_leads, '#C9A84C')}
+    ${kpi('Book clicks', totals.book_clicks_unique_leads)}
     ${kpi('Shares', totals.shares)}
     ${kpi('Conversion', conv + '%')}
   </div>
+
+  ${renderUnlocksTable(report.unlock_rows)}
 
   <h2 style="font-size:16px;color:#C9A84C;margin:24px 0 10px;text-transform:uppercase;letter-spacing:0.16em">
     By clinic
@@ -438,8 +560,10 @@ export function reportToHtml(report: FullReport): string {
   </table>
 
   <div style="margin-top:36px;padding-top:18px;border-top:1px solid #2a2a2a;color:rgba(255,255,255,0.45);font-size:12px;line-height:1.6">
-    Per-lead detail (one row per <em>book_clicked</em> event) is attached as
-    leads.csv. Open in Excel or Google Sheets for partner-billing exports.
+    Two CSVs are attached:<br>
+    • <strong>identified-leads.csv</strong> — name, email, phone from the
+    result-screen lead gate (your hot list).<br>
+    • <strong>events.csv</strong> — one row per book-click for partner billing.
     <br><br>
     Live dashboard: <a href="https://simfacemd.com/admin" style="color:#C9A84C">simfacemd.com/admin</a>
   </div>
@@ -462,4 +586,62 @@ function escapeHtml(s: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+/**
+ * v5.1 — inline table of identified leads at the top of the daily email.
+ * This is the most actionable thing in the report (callable contacts), so
+ * it goes ABOVE the by-clinic / by-city aggregates.
+ */
+function renderUnlocksTable(rows: UnlockRow[]): string {
+  if (!rows || rows.length === 0) {
+    return '';
+  }
+  const body = rows
+    .map((r) => {
+      const name = [r.first_name, r.last_name].filter(Boolean).join(' ') || '—';
+      const proc = r.procedure_id ?? '—';
+      const where =
+        [r.ip_city, r.ip_region, r.ip_country].filter(Boolean).join(', ') || '—';
+      const sourceTag =
+        r.source === 'google'
+          ? '<span style="background:#1a73e8;color:#fff;padding:1px 6px;border-radius:3px;font-size:10px;margin-left:4px">G</span>'
+          : '';
+      const time = (r.created_at ?? '').slice(11, 16);
+      return `
+        <tr>
+          <td style="padding:8px 10px;border-bottom:1px solid #2a2a2a">
+            <strong>${escapeHtml(name)}</strong>${sourceTag}
+          </td>
+          <td style="padding:8px 10px;border-bottom:1px solid #2a2a2a;color:rgba(255,255,255,0.85)">
+            ${escapeHtml(r.email ?? '—')}
+          </td>
+          <td style="padding:8px 10px;border-bottom:1px solid #2a2a2a;color:rgba(255,255,255,0.85);white-space:nowrap">
+            ${escapeHtml(r.phone ?? '—')}
+          </td>
+          <td style="padding:8px 10px;border-bottom:1px solid #2a2a2a;color:rgba(255,255,255,0.65);font-size:13px">
+            ${escapeHtml(proc)}
+          </td>
+          <td style="padding:8px 10px;border-bottom:1px solid #2a2a2a;color:rgba(255,255,255,0.55);font-size:12px">
+            ${escapeHtml(where)} · ${escapeHtml(time)}
+          </td>
+        </tr>`;
+    })
+    .join('');
+  return `
+  <h2 style="font-size:16px;color:#C9A84C;margin:24px 0 10px;text-transform:uppercase;letter-spacing:0.16em">
+    Identified leads (call list)
+  </h2>
+  <table style="width:100%;border-collapse:collapse;font-size:14px">
+    <thead>
+      <tr style="color:rgba(255,255,255,0.5);font-size:11px;text-transform:uppercase;letter-spacing:0.12em">
+        <th align="left" style="padding:8px 10px;font-weight:500">Name</th>
+        <th align="left" style="padding:8px 10px;font-weight:500">Email</th>
+        <th align="left" style="padding:8px 10px;font-weight:500">Phone</th>
+        <th align="left" style="padding:8px 10px;font-weight:500">Procedure</th>
+        <th align="left" style="padding:8px 10px;font-weight:500">Where · Time</th>
+      </tr>
+    </thead>
+    <tbody>${body}</tbody>
+  </table>`;
 }

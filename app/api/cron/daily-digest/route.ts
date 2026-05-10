@@ -4,7 +4,8 @@ import {
   buildReport,
   leadsToCsv,
   rangeForYesterday,
-  reportToHtml
+  reportToHtml,
+  unlocksToCsv
 } from '../../../lib/reports';
 
 /**
@@ -38,12 +39,19 @@ export async function GET(req: NextRequest) {
   const report = await buildReport(range);
 
   const html = reportToHtml(report);
-  const csv = leadsToCsv(report.lead_rows);
-  const csvBase64 = Buffer.from(csv, 'utf-8').toString('base64');
+  const eventsCsv = leadsToCsv(report.lead_rows);
+  const eventsCsvBase64 = Buffer.from(eventsCsv, 'utf-8').toString('base64');
+  const unlocksCsv = unlocksToCsv(report.unlock_rows);
+  const unlocksCsvBase64 = Buffer.from(unlocksCsv, 'utf-8').toString('base64');
 
   const to = process.env.DIGEST_RECIPIENT || 'drmoubayed@cliniquefacemd.com';
   const from = process.env.DIGEST_FROM || 'SimFaceMD <reports@simfacemd.com>';
-  const subject = `SimFaceMD daily report \u2014 ${range.label} \u2014 ${report.totals.book_clicks_unique_leads} leads`;
+  // Subject leads with the metric Dr. Moubayed actually cares about:
+  // identified leads (= name/email/phone he can call). Falls back to book
+  // clicks if the lead gate hasn't been used yet.
+  const headlineCount = report.totals.unlocks || report.totals.book_clicks_unique_leads;
+  const headlineLabel = report.totals.unlocks > 0 ? 'identified leads' : 'book clicks';
+  const subject = `SimFaceMD daily report \u2014 ${range.label} \u2014 ${headlineCount} ${headlineLabel}`;
 
   // If RESEND_API_KEY isn't set, bail gracefully and return the report
   // body so the operator can still see it via manual trigger.
@@ -65,8 +73,12 @@ export async function GET(req: NextRequest) {
       html,
       attachments: [
         {
-          filename: `simfacemd-leads-${range.start.slice(0, 10)}.csv`,
-          content: csvBase64
+          filename: `simfacemd-identified-leads-${range.start.slice(0, 10)}.csv`,
+          content: unlocksCsvBase64
+        },
+        {
+          filename: `simfacemd-events-${range.start.slice(0, 10)}.csv`,
+          content: eventsCsvBase64
         }
       ]
     });
