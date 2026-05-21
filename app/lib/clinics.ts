@@ -10,10 +10,13 @@
  *   • Surgical procedures (rhinoplasty, facelift) ALWAYS route to the
  *     surgical home base (Clinique Face MD). These are high-margin cases
  *     we never refer out.
- *   • Non-surgical procedures route to:
- *       - The home base if user is within HOME_BASE_RADIUS_KM (300 km)
- *       - Otherwise, the nearest active partner clinic that offers the
- *         requested treatment.
+ *   • Non-surgical procedures route to the GEOGRAPHICALLY NEAREST
+ *     active clinic that offers the requested treatment — home base
+ *     and partners are treated as equals in the distance ranking. A
+ *     visitor in Toronto will route to Montreal (home base) because
+ *     it's the nearest; a visitor in Calgary will route to Winnipeg
+ *     (Visage) because Winnipeg is closer than Montreal.
+ *   • No location detected → home base (safe default).
  */
 
 import type { ProcedureId } from './i18n';
@@ -30,9 +33,10 @@ export function isNonSurgical(procedureId: ProcedureId): boolean {
 }
 
 /**
- * The radius around the surgical home base inside which non-surgical
- * patients still get routed to the home base. Anything beyond this gets
- * routed to a partner.
+ * @deprecated v5.1.3 — the 300 km radius rule was removed in favour
+ * of pure nearest-clinic routing. Kept as a constant only because
+ * other modules may still import it; nothing in the routing path
+ * reads it anymore.
  */
 export const HOME_BASE_RADIUS_KM = 300;
 
@@ -100,6 +104,63 @@ export const CLINICS: Clinic[] = [
     isHomeBase: true,
     active: true,
     isFeatured: true
+  },
+
+  // Winnipeg — covers western Canada / central US prairies.
+  {
+    id: 'visage-winnipeg',
+    name: 'Visage Cosmetic Clinic',
+    city: 'Winnipeg',
+    region: 'MB',
+    country: 'CA',
+    lat: 49.84676,
+    lng: -97.19836,
+    phone: '18778479398',
+    phoneDisplay: '1-877-847-9398',
+    bookingUrl: 'https://www.visagecosmeticclinic.com/book-a-consultation/',
+    websiteUrl: 'http://visagecosmeticclinic.com/',
+    rating: 4.8,
+    reviewSource: 'Google Reviews',
+    treatments: ['botox', 'lip_cheek_filler', 'co2_laser', 'bbl_photofacial'],
+    active: true
+  },
+
+  // Los Angeles — covers Southern California / US West Coast.
+  {
+    id: 'cupidlips-la',
+    name: 'Cupid Lips',
+    city: 'West Hollywood',
+    region: 'CA',
+    country: 'US',
+    lat: 34.09206,
+    lng: -118.37998,
+    phone: '14246670036',
+    phoneDisplay: '+1 424-667-0036',
+    bookingUrl: 'https://www.cupid-lips.com/pages/contact',
+    websiteUrl: 'https://www.cupid-lips.com/',
+    rating: 4.9,
+    reviewSource: 'Google Reviews',
+    treatments: ['botox', 'lip_cheek_filler', 'co2_laser', 'bbl_photofacial'],
+    active: true
+  },
+
+  // New York — covers US East Coast.
+  {
+    id: 'medispa-noura-nyc',
+    name: 'Medispa by Noura',
+    city: 'New York',
+    region: 'NY',
+    country: 'US',
+    lat: 40.77336,
+    lng: -73.96580,
+    phone: '12128320444',
+    phoneDisplay: '+1 212-832-0444',
+    bookingUrl: 'https://doczema.com/book/org/moustafa-mourad-s-practice',
+    websiteUrl: 'https://www.nycfacedoc.com/specialties/medispa-by-noura/',
+    rating: 4.9,
+    reviewSource: 'Google Reviews',
+    treatments: ['botox', 'lip_cheek_filler', 'co2_laser', 'bbl_photofacial'],
+    active: true
   }
   // ── PARTNER CLINICS ────────────────────────────────────────────────
   // Add partner clinics below. They will receive non-surgical referrals
@@ -189,10 +250,13 @@ export type RoutingDecision = {
    */
   reason:
     | 'surgical_home_base' // surgery → home base, distance ignored
-    | 'in_radius_home_base' // non-surgical, within 300 km → home base
-    | 'nearest_partner' // non-surgical, outside radius → nearest partner
-    | 'no_partner_fallback' // non-surgical, outside radius, but no partner offers it → home base anyway
-    | 'no_location_home_base'; // location unknown → home base (safe default)
+    | 'nearest_clinic' // non-surgical → nearest active clinic (home or partner)
+    | 'no_clinic_offers_treatment' // no active clinic offers this treatment → home base fallback
+    | 'no_location_home_base' // location unknown → home base (safe default)
+    // ---- legacy v5.1.2 reasons, kept so old DB rows still parse ----
+    | 'in_radius_home_base'
+    | 'nearest_partner'
+    | 'no_partner_fallback';
 };
 
 /**
@@ -218,7 +282,7 @@ export function resolveBookingClinic(
     };
   }
 
-  // Non-surgical, no location → home base (no way to find nearest partner)
+  // Non-surgical, no location → home base (no way to compare distances).
   if (!userCoords) {
     return {
       clinic: homeBase,
@@ -227,33 +291,26 @@ export function resolveBookingClinic(
     };
   }
 
-  const distToHome = distanceKm(userCoords, homeBase);
-
-  // Within 300 km of the home base → home base wins
-  if (distToHome <= HOME_BASE_RADIUS_KM) {
-    return {
-      clinic: homeBase,
-      distanceKm: distToHome,
-      reason: 'in_radius_home_base'
-    };
-  }
-
-  // Outside radius → find nearest active partner that offers this treatment
-  const eligiblePartners = getActivePartners().filter((c) =>
-    c.treatments.includes(procedureId)
+  // v5.1.3 — pure nearest-clinic routing. Build a candidate pool of
+  // ALL active clinics that offer the requested treatment (home base
+  // + partners, treated equally) and pick the closest by Haversine
+  // distance. No 300 km radius, no home-base bias.
+  const candidates = CLINICS.filter(
+    (c) => c.active && c.treatments.includes(procedureId)
   );
-  if (eligiblePartners.length === 0) {
-    // No partner can serve this treatment — fall back to home base so the
-    // patient still has a path to book. Logged as 'no_partner_fallback'
-    // so we know to recruit a partner there.
+
+  if (candidates.length === 0) {
+    // No active clinic offers this procedure at all — fall back to
+    // the home base so the visitor still has SOMEWHERE to book.
+    // Surfaces in analytics as a partner-recruitment signal.
     return {
       clinic: homeBase,
-      distanceKm: distToHome,
-      reason: 'no_partner_fallback'
+      distanceKm: distanceKm(userCoords, homeBase),
+      reason: 'no_clinic_offers_treatment'
     };
   }
 
-  const ranked = eligiblePartners
+  const ranked = candidates
     .map((c) => ({ clinic: c, dist: distanceKm(userCoords, c) }))
     .sort((a, b) => a.dist - b.dist);
 
@@ -261,7 +318,7 @@ export function resolveBookingClinic(
   return {
     clinic: nearest.clinic,
     distanceKm: nearest.dist,
-    reason: 'nearest_partner'
+    reason: 'nearest_clinic'
   };
 }
 

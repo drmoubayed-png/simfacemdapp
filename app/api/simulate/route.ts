@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { fal } from '@fal-ai/client';
 import sharp from 'sharp';
+import { verifyUnlockToken } from '../../lib/unlockToken';
 
 fal.config({ credentials: process.env.FAL_KEY });
 
@@ -141,6 +142,20 @@ const FAL_MODEL = 'fal-ai/nano-banana-pro/edit';
 
 export async function POST(req: NextRequest) {
   try {
+    // ----------------------------------------------------------------
+    // v5.1.4 — REQUIRE a valid unlock token before doing ANY paid work.
+    // The token is issued by /api/leads/submit and carried by the
+    // client in the `x-unlock-token` header. No token = 401 = $0 spend.
+    // ----------------------------------------------------------------
+    const token = req.headers.get('x-unlock-token');
+    const verified = verifyUnlockToken(token);
+    if (!verified.ok) {
+      return NextResponse.json(
+        { error: 'Identification required.', reason: verified.reason },
+        { status: 401 }
+      );
+    }
+
     if (!process.env.FAL_KEY) {
       return NextResponse.json(
         { error: 'Server is missing FAL_KEY environment variable.' },

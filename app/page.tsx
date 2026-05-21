@@ -26,7 +26,9 @@ import {
   incrementSimsToday,
   isAtDailyLimit,
   getSimsToday,
-  DAILY_SIM_LIMIT
+  DAILY_SIM_LIMIT,
+  setUnlockToken,
+  getUnlockToken
 } from './components/LeadGate';
 import { useLocation } from './lib/useLocation';
 import {
@@ -159,26 +161,28 @@ export default function HomePage() {
     setError(null);
   }, []);
 
-  const handleSimulate = useCallback(async () => {
+  // v5.1.2 — actual API call, only invoked AFTER the visitor has
+  // identified themselves (gate unlocked). Splitting this out from
+  // handleSimulate means we never burn Gemini credits on anonymous
+  // visitors who bail at the consent gate.
+  const runSimulationApi = useCallback(async () => {
     if (!userPhoto || !selectedProcedure) return;
-
-    // v5.1.1 — enforce daily simulation cap. We check on the way OUT of
-    // the photo screen so the user gets a clear message instead of a
-    // silent failure or a charged sim they can't view.
-    if (isAtDailyLimit()) {
-      setScreen('limit');
-      return;
-    }
-
     setError(null);
     setResultPhoto(null);
     setIsLoading(true);
-    setScreen('result');
 
     try {
+      // v5.1.4 — server-side gate requires a valid HMAC unlock token.
+      // The token is issued by /api/leads/submit on successful
+      // identification and stashed in localStorage. No token = the
+      // server returns 401 BEFORE doing any paid AI work.
+      const unlockToken = getUnlockToken() ?? '';
       const res = await fetch('/api/simulate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-unlock-token': unlockToken
+        },
         body: JSON.stringify({
           imageBase64: userPhoto,
           procedure: selectedProcedure
@@ -202,6 +206,35 @@ export default function HomePage() {
       setIsLoading(false);
     }
   }, [userPhoto, selectedProcedure, t]);
+
+  const handleSimulate = useCallback(async () => {
+    if (!userPhoto || !selectedProcedure) return;
+
+    // v5.1.1 — enforce daily simulation cap. We check on the way OUT of
+    // the photo screen so the user gets a clear message instead of a
+    // silent failure or a charged sim they can't view.
+    if (isAtDailyLimit()) {
+      setScreen('limit');
+      return;
+    }
+
+    // v5.1.2 — DO NOT fire the AI simulation until the visitor has
+    // unlocked. If they haven't, just navigate to the result screen
+    // in a pre-unlock state (placeholder + gate modal). The API call
+    // is triggered from handleUnlocked() the moment they identify.
+    setError(null);
+    setResultPhoto(null);
+    setScreen('result');
+
+    if (isUnlockedToday()) {
+      // Repeat visitor in the same day — already paid the identity
+      // cost, charge ahead with the sim.
+      runSimulationApi();
+    } else {
+      // First sim of the day — wait for unlock.
+      setIsLoading(false);
+    }
+  }, [userPhoto, selectedProcedure, runSimulationApi]);
 
   return (
     <main className="min-h-screen bg-bg flex flex-col items-center">
@@ -252,6 +285,15 @@ export default function HomePage() {
             error={error}
             onRetry={handleSimulate}
             onReset={reset}
+            onUnlock={(leadId, _firstName, unlockToken) => {
+              // v5.1.2 — the visitor identified themselves. Stamp the
+              // localStorage day-counter and FINALLY fire the AI sim.
+              // v5.1.4 — also stash the server-issued HMAC unlock
+              // token so the simulate endpoint accepts the call.
+              markUnlockedToday(leadId);
+              setUnlockToken(unlockToken);
+              runSimulationApi();
+            }}
           />
         )}
       </div>
@@ -1210,7 +1252,8 @@ function ResultScreen({
   isLoading,
   error,
   onRetry,
-  onReset
+  onReset,
+  onUnlock
 }: {
   procedure: Procedure;
   userPhoto: string | null;
@@ -1219,6 +1262,17 @@ function ResultScreen({
   error: string | null;
   onRetry: () => void;
   onReset: () => void;
+  /**
+   * v5.1.2 — fired after the visitor identifies themselves on the
+   * pre-unlock gate. Triggers the actual /api/simulate call. Without
+   * this prop the screen would only show the gate but never start
+   * the AI work.
+   */
+  onUnlock: (
+    leadId: number,
+    firstName: string | null,
+    unlockToken: string | null
+  ) => void;
 }) {
   return (
     <section className="pt-6 pb-6 animate-fade-up flex-1 flex flex-col">
@@ -1232,6 +1286,17 @@ function ResultScreen({
         <ErrorState error={error} onRetry={onRetry} onReset={onReset} />
       )}
 
+      {/* v5.1.2 — visitor hasn't identified yet AND no API call has
+          fired. Show a blurred placeholder of their own photo with
+          the gate modal on top. Cheap path: no Gemini cost yet. */}
+      {!isLoading && !error && !resultPhoto && userPhoto && (
+        <PreUnlockState
+          procedure={procedure}
+          userPhoto={userPhoto}
+          onUnlock={onUnlock}
+        />
+      )}
+
       {!isLoading && !error && resultPhoto && userPhoto && (
         <ResultContent
           procedure={procedure}
@@ -1241,6 +1306,108 @@ function ResultScreen({
         />
       )}
     </section>
+  );
+}
+
+/* ---------------------------------------------------------------- */
+/*  Pre-unlock state (v5.1.2)                                        */
+/* ---------------------------------------------------------------- */
+
+/**
+ * Renders the visitor's own photo behind a heavy blur + scrim + the
+ * LeadGate modal. Crucially, NO /api/simulate call has been made yet
+ * — we wait for the visitor to identify before spending any AI
+ * credits. Once they submit the gate, onUnlock() fires which the
+ * parent uses to trigger runSimulationApi().
+ */
+function PreUnlockState({
+  procedure,
+  userPhoto,
+  onUnlock
+}: {
+  procedure: Procedure;
+  userPhoto: string;
+  onUnlock: (
+    leadId: number,
+    firstName: string | null,
+    unlockToken: string | null
+  ) => void;
+}) {
+  const { location } = useLocation();
+  const { lang } = useI18n();
+
+  // Same routing math the eventual result screen would do — we need
+  // it now so the unlock row is stamped with the clinic + distance.
+  const gateDecision: RoutingDecision = useMemo(
+    () =>
+      resolveBookingClinic(
+        procedure.id,
+        location ? { lat: location.lat, lng: location.lng } : null
+      ),
+    [procedure.id, location]
+  );
+
+  const googleClientId =
+    process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID && process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID.length > 0
+      ? process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID
+      : undefined;
+
+  return (
+    <div className="flex-1 flex flex-col relative" style={{ minHeight: '60vh' }}>
+      {/* Blurred placeholder — visitor's own photo, no AI work. */}
+      <div
+        aria-hidden
+        style={{
+          filter: 'blur(25px)',
+          WebkitFilter: 'blur(25px)',
+          transform: 'scale(1.1)',
+          pointerEvents: 'none',
+          userSelect: 'none',
+          flex: 1,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '24px 0',
+          overflow: 'hidden'
+        }}
+      >
+        <img
+          src={userPhoto}
+          alt=""
+          style={{
+            maxWidth: '100%',
+            maxHeight: '60vh',
+            borderRadius: 12,
+            objectFit: 'cover'
+          }}
+        />
+      </div>
+
+      {/* Dark scrim to match the unlocked-result blur look. */}
+      <div
+        aria-hidden
+        style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.4)',
+          pointerEvents: 'none',
+          zIndex: 40
+        }}
+      />
+
+      <LeadGate
+        googleClientId={googleClientId}
+        context={{
+          procedure_id: procedure.id,
+          clinic_id: gateDecision.clinic.id,
+          routing_reason: gateDecision.reason,
+          distance_km: gateDecision.distanceKm ?? null,
+          session_id: getSessionId(),
+          lang
+        }}
+        onUnlocked={onUnlock}
+      />
+    </div>
   );
 }
 
@@ -1420,62 +1587,18 @@ function ResultContent({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [procedure.id]);
 
-  // ---- v5.1: lead gate ----
-  // Compute the same routing decision ClinicSection will compute, so we
-  // can attach (clinic_id, routing_reason, distance_km) to the unlock row.
-  // This is a pure-function call (no extra network) so duplicating it in
-  // two siblings is fine.
-  const gateDecision: RoutingDecision = useMemo(
-    () =>
-      resolveBookingClinic(
-        procedure.id,
-        location ? { lat: location.lat, lng: location.lng } : null
-      ),
-    [procedure.id, location]
-  );
-
-  // Locked = blurred + modal until the visitor unlocks (Google or form).
-  // Initial state defers to localStorage so a same-day repeat visitor
-  // skips the gate. Mounted as `null` first to avoid SSR/CSR mismatch.
-  const [unlocked, setUnlocked] = useState<boolean | null>(null);
-  // Daily counter — starts at the value already in localStorage.
-  const [simsToday, setSimsTodayState] = useState<number>(0);
+  // v5.1.2: by the time we reach ResultContent the visitor is ALWAYS
+  // identified (PreUnlockState gated entry to this component). One
+  // increment per successful sim, idempotent per resultPhoto string
+  // so React re-renders don't double-count.
+  const [simsToday, setSimsTodayState] = useState<number>(() => getSimsToday());
+  const countedRef = useRef<string | null>(null);
   useEffect(() => {
-    const wasUnlocked = isUnlockedToday();
-    setUnlocked(wasUnlocked);
-    // v5.1.1: if the visitor is ALREADY unlocked when this result mounts,
-    // it means this is a 2nd/3rd/4th simulation today — bump the counter
-    // before showing the result. The first-ever unlock is handled by
-    // markUnlockedToday() in handleUnlocked() below.
-    if (wasUnlocked) {
-      setSimsTodayState(incrementSimsToday());
-    } else {
-      setSimsTodayState(getSimsToday());
-    }
-    // Re-run when the procedure changes (the user picked another sim).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [procedure.id]);
-
-  const handleUnlocked = useCallback((leadId: number, _firstName: string | null) => {
-    markUnlockedToday(leadId);
-    setUnlocked(true);
-    setSimsTodayState(getSimsToday());
-    trackEvent('share_clicked', {
-      // We piggyback on the existing tracker for now — a future migration
-      // could add a dedicated 'lead_unlocked' event_name. For today, the
-      // PII row in lead_unlocks is the source of truth.
-      channel: 'lead_unlock'
-    });
-  }, []);
-
-  // While unlocked-state is unknown (very brief, before localStorage read),
-  // pretend locked so the gate doesn't flash off then back on.
-  const isLocked = unlocked !== true;
-
-  const googleClientId =
-    process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID && process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID.length > 0
-      ? process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID
-      : undefined;
+    if (!resultPhoto) return;
+    if (countedRef.current === resultPhoto) return;
+    countedRef.current = resultPhoto;
+    setSimsTodayState(incrementSimsToday());
+  }, [resultPhoto]);
 
   return (
     <div
@@ -1501,88 +1624,41 @@ function ResultContent({
         {t('result.subtitle', { procedure: procedure.name })}
       </p>
 
-      {/* Locked content — blurred + dimmed until the gate is unlocked.
-          We blur the WHOLE result body (slider + actions + price + clinic)
-          so the visitor sees there's something there but can't read it. */}
-      <div
-        aria-hidden={isLocked}
-        style={{
-          filter: isLocked ? 'blur(25px)' : 'none',
-          WebkitFilter: isLocked ? 'blur(25px)' : 'none',
-          transition: 'filter 240ms ease',
-          pointerEvents: isLocked ? 'none' : 'auto',
-          userSelect: isLocked ? 'none' : 'auto'
-        }}
+      {/* v5.1.2 — visitor is ALWAYS identified by the time this component
+          renders (PreUnlockState handles the gate before /api/simulate
+          is even invoked). No more blur / scrim / inline gate here. */}
+      <BeforeAfterSlider before={userPhoto} after={resultPhoto} />
+
+      <ActionRow
+        procedure={procedure}
+        beforePhoto={userPhoto}
+        resultPhoto={resultPhoto}
+        onReset={onReset}
+      />
+
+      <PriceBox procedure={procedure} />
+
+      <ClinicSection procedure={procedure} />
+
+      <p
+        className="text-[11px] text-center leading-relaxed mt-6"
+        style={{ color: 'rgba(255,255,255,0.4)' }}
       >
-        <BeforeAfterSlider before={userPhoto} after={resultPhoto} />
+        {t('result.disclaimer')}
+      </p>
 
-        {/* Share/Download lives directly under the before/after slider so the
-            first thing the user can do after seeing their result is share it.
-            Price + clinic context follow below for anyone who keeps scrolling. */}
-        <ActionRow
-          procedure={procedure}
-          beforePhoto={userPhoto}
-          resultPhoto={resultPhoto}
-          onReset={onReset}
-        />
-
-        <PriceBox procedure={procedure} />
-
-        <ClinicSection procedure={procedure} />
-
+      {/* Daily quota footer — reassures the visitor how many sims
+          they have left without being pushy. */}
+      {simsToday >= 1 && (
         <p
-          className="text-[11px] text-center leading-relaxed mt-6"
-          style={{ color: 'rgba(255,255,255,0.4)' }}
+          className="text-[11px] text-center mt-2"
+          style={{ color: 'rgba(201,168,76,0.65)', letterSpacing: '0.04em' }}
         >
-          {t('result.disclaimer')}
+          {t('limit.counter', {
+            n: String(Math.min(simsToday, DAILY_SIM_LIMIT)),
+            max: String(DAILY_SIM_LIMIT)
+          })}
         </p>
-
-        {/* v5.1.1 — daily quota footer. Reassures the user how many
-            sims they have left without being pushy. Hidden until they
-            unlock so it doesn't leak through the blur. */}
-        {!isLocked && simsToday >= 1 && (
-          <p
-            className="text-[11px] text-center mt-2"
-            style={{ color: 'rgba(201,168,76,0.65)', letterSpacing: '0.04em' }}
-          >
-            {t('limit.counter', {
-              n: String(Math.min(simsToday, DAILY_SIM_LIMIT)),
-              max: String(DAILY_SIM_LIMIT)
-            })}
-          </p>
-        )}
-      </div>
-
-      {/* Dark scrim only while locked — sits between the blurred content
-          and the modal so the modal pops cleanly. The 40% opacity matches
-          the spec. The LeadGate component itself adds a tiny extra scrim
-          on top to lift the card. */}
-      {isLocked && (
-        <div
-          aria-hidden
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.40)',
-            zIndex: 49,
-            pointerEvents: 'none'
-          }}
-        />
-      )}
-
-      {isLocked && (
-        <LeadGate
-          googleClientId={googleClientId}
-          context={{
-            procedure_id: procedure.id,
-            clinic_id: gateDecision.clinic.id,
-            routing_reason: gateDecision.reason,
-            distance_km: gateDecision.distanceKm ?? null,
-            session_id: getSessionId(),
-            lang
-          }}
-          onUnlocked={handleUnlocked}
-        />
       )}
     </div>
   );
@@ -1902,7 +1978,10 @@ function ClinicSection({ procedure }: { procedure: Procedure }) {
   const others = ranked.filter((c) => c.id !== decision.clinic.id);
   const hasOthers = others.length > 0;
 
-  const isPartnerReferral = decision.reason === 'nearest_partner';
+  // v5.1.3: partner referral = the chosen clinic isn't the home base.
+  // This is cleaner than checking the reason string because nearest-clinic
+  // routing can now point at a partner under multiple reasons.
+  const isPartnerReferral = !decision.clinic.isHomeBase;
 
   // Banner text — only show if we successfully detected a city
   const locationLabel = location?.city

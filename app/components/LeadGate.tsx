@@ -51,8 +51,16 @@ type Props = {
   googleClientId: string | undefined;
   /** Snapshot of what the visitor was looking at when the gate opened. */
   context: GateContext;
-  /** Called after a successful unlock with the server-issued lead id. */
-  onUnlocked: (leadId: number, firstName: string | null) => void;
+  /**
+   * Called after a successful unlock. v5.1.4 adds `unlockToken` which the
+   * parent MUST send as `x-unlock-token` on /api/simulate so the server-
+   * side gate accepts the request.
+   */
+  onUnlocked: (
+    leadId: number,
+    firstName: string | null,
+    unlockToken: string | null
+  ) => void;
 };
 
 declare global {
@@ -67,6 +75,7 @@ export function LeadGate({ googleClientId, context, onUnlocked }: Props) {
   const googleBtnRef = useRef<HTMLDivElement | null>(null);
 
   const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
   const [phoneRaw, setPhoneRaw] = useState(''); // formatted, e.g. "(514) 555-1"
   const [submitting, setSubmitting] = useState(false);
@@ -95,7 +104,7 @@ export function LeadGate({ googleClientId, context, onUnlocked }: Props) {
           setSubmitting(false);
           return;
         }
-        onUnlocked(j.lead_id ?? 0, j.first_name ?? null);
+        onUnlocked(j.lead_id ?? 0, j.first_name ?? null, j.unlock_token ?? null);
       } catch {
         setError(t('gate.errorGeneric'));
         setSubmitting(false);
@@ -182,11 +191,12 @@ export function LeadGate({ googleClientId, context, onUnlocked }: Props) {
     e.preventDefault();
     setError(null);
 
-    const trimmedName = firstName.trim();
+    const trimmedFirst = firstName.trim();
+    const trimmedLast = lastName.trim();
     const trimmedEmail = email.trim();
     const digits = phoneRaw.replace(/\D+/g, '');
 
-    if (!trimmedName || !trimmedEmail || !digits) {
+    if (!trimmedFirst || !trimmedLast || !trimmedEmail || !digits) {
       setError(t('gate.errorRequired'));
       return;
     }
@@ -206,7 +216,8 @@ export function LeadGate({ googleClientId, context, onUnlocked }: Props) {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           source: 'manual',
-          first_name: trimmedName,
+          first_name: trimmedFirst,
+          last_name: trimmedLast,
           email: trimmedEmail,
           phone: phoneRaw,
           ...context,
@@ -221,7 +232,11 @@ export function LeadGate({ googleClientId, context, onUnlocked }: Props) {
         setSubmitting(false);
         return;
       }
-      onUnlocked(j.lead_id ?? 0, j.first_name ?? trimmedName);
+      onUnlocked(
+        j.lead_id ?? 0,
+        j.first_name ?? trimmedFirst,
+        j.unlock_token ?? null
+      );
     } catch {
       setError(t('gate.errorGeneric'));
       setSubmitting(false);
@@ -328,6 +343,17 @@ export function LeadGate({ googleClientId, context, onUnlocked }: Props) {
             value={firstName}
             onChange={(e) => setFirstName(e.target.value)}
             autoComplete="given-name"
+            required
+            style={inputStyle}
+            disabled={submitting}
+          />
+
+          <label style={fieldLabelStyle}>{t('gate.lastName')}</label>
+          <input
+            type="text"
+            value={lastName}
+            onChange={(e) => setLastName(e.target.value)}
+            autoComplete="family-name"
             required
             style={inputStyle}
             disabled={submitting}
@@ -452,6 +478,10 @@ export const DAILY_SIM_LIMIT = 4;
 
 const STORAGE_PREFIX = 'simfacemd.sims.';
 const LEGACY_PREFIX = 'simfacemd.unlocked.';
+// v5.1.4 — stash the HMAC unlock token (issued by /api/leads/submit)
+// so repeat sims in the same day can hit /api/simulate without
+// re-identifying. Token lifetime matches MAX_TOKEN_AGE_SEC (24h).
+const TOKEN_STORAGE_KEY = 'simfacemd.unlock_token';
 
 function dayStamp(now = new Date()): string {
   const fmt = new Intl.DateTimeFormat('en-CA', {
@@ -480,6 +510,8 @@ function readToday(): { count: number; leadId: string } {
       const legacyKey = `${LEGACY_PREFIX}${dayStamp()}`;
       const legacy = window.localStorage.getItem(legacyKey);
       if (legacy) {
+        // v5.1.2: legacy was "unlocked once = at least one sim done"
+        // so seed count=1 + carry the lead id forward.
         raw = `1:${legacy}`;
         window.localStorage.setItem(k, raw);
         window.localStorage.removeItem(legacyKey);
@@ -515,7 +547,9 @@ function writeToday(count: number, leadId: string): void {
 
 /** True if the visitor has already identified themselves today. */
 export function isUnlockedToday(): boolean {
-  return readToday().count >= 1;
+  // v5.1.2: identity is tracked via the lead-id stash (non-empty after
+  // markUnlockedToday), independent of the simulation counter.
+  return readToday().leadId.length > 0;
 }
 
 /** How many simulation results the visitor has viewed today. */
@@ -529,14 +563,43 @@ export function isAtDailyLimit(): boolean {
 }
 
 /**
- * First unlock of the day. Sets count to 1 (i.e. the result they're
- * about to view counts as sim #1). If somehow a count already exists
- * (e.g. a legacy session), keep the higher value.
+ * Records that the visitor has identified themselves today. The lead
+ * id is stored alongside the counter so future sim renders inherit
+ * it.
+ *
+ * v5.1.2: we DO NOT bump the count here. The result render owns the
+ * increment via incrementSimsToday() so we get exactly one bump per
+ * successful sim regardless of whether the visitor unlocked moments
+ * ago or already unlocked earlier today.
  */
 export function markUnlockedToday(leadId: number): void {
   const cur = readToday();
-  const nextCount = Math.max(cur.count, 1);
-  writeToday(nextCount, String(leadId || cur.leadId || '1'));
+  // Keep current count, just stash the lead id (or a marker).
+  writeToday(cur.count, String(leadId || cur.leadId || '1'));
+}
+
+/**
+ * Persist the server-issued HMAC unlock token so repeat visits today
+ * can call /api/simulate without re-identifying.
+ */
+export function setUnlockToken(token: string | null): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (token) window.localStorage.setItem(TOKEN_STORAGE_KEY, token);
+    else window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Read the stashed HMAC unlock token (or null). */
+export function getUnlockToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem(TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
 }
 
 /**

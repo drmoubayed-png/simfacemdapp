@@ -104,6 +104,7 @@ const DICT = {
   'gate.continueGoogle': { en: 'Continue with Google', fr: 'Continuer avec Google' },
   'gate.or': { en: 'or', fr: 'ou' },
   'gate.firstName': { en: 'First Name', fr: 'Prénom' },
+  'gate.lastName': { en: 'Last Name', fr: 'Nom de famille' },
   'gate.email': { en: 'Email Address', fr: 'Courriel' },
   'gate.phone': { en: 'Phone Number', fr: 'Numéro de téléphone' },
   'gate.unlock': { en: 'Unlock my result', fr: 'Débloquer mon résultat' },

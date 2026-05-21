@@ -359,22 +359,23 @@ export async function buildReport(range: ReportRange): Promise<FullReport> {
  * with partners while keeping the PII export internal).
  */
 export function unlocksToCsv(rows: UnlockRow[]): string {
+  // v5.1.4 — column order matches the simplified admin table for
+  // sales-team mental model continuity. Extra DB columns are kept at
+  // the end so the export remains audit-complete.
   const headers = [
-    'created_at',
-    'source',
     'first_name',
     'last_name',
     'email',
     'phone',
+    'procedure',
+    'where',
+    'time',
+    'source',
     'email_verified',
-    'procedure_id',
     'clinic_id',
     'clinic_name',
     'routing_reason',
     'distance_km',
-    'ip_city',
-    'ip_region',
-    'ip_country',
     'lang',
     'session_id'
   ];
@@ -384,25 +385,36 @@ export function unlocksToCsv(rows: UnlockRow[]): string {
     if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
     return s;
   };
+  const prettyProc = (id: string | null): string => {
+    if (!id) return '';
+    const m: Record<string, string> = {
+      ultrasonic_rhinoplasty: 'Ultrasonic rhinoplasty',
+      deep_plane_facelift: 'Deep-plane facelift',
+      botox: 'Botox',
+      lip_cheek_filler: 'Lip / cheek filler',
+      co2_laser: 'CO2 laser',
+      bbl_photofacial: 'BBL photofacial'
+    };
+    return m[id] || id.replace(/_/g, ' ');
+  };
   const lines = [headers.join(',')];
   for (const r of rows) {
+    const where = [r.ip_city, r.ip_region, r.ip_country].filter(Boolean).join(', ');
     lines.push(
       [
-        r.created_at,
-        r.source,
         r.first_name,
         r.last_name,
         r.email,
         r.phone,
+        prettyProc(r.procedure_id),
+        where,
+        r.created_at,
+        r.source,
         r.email_verified,
-        r.procedure_id,
         r.clinic_id,
         r.clinic_name,
         r.routing_reason,
         r.distance_km,
-        r.ip_city,
-        r.ip_region,
-        r.ip_country,
         r.lang,
         r.session_id
       ]

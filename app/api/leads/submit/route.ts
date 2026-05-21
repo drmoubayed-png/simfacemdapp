@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { geolocation } from '@vercel/functions';
 import { insertLeadUnlock } from '../../../lib/db';
 import { isDbConfigured } from '../../../lib/db';
+import { issueUnlockToken } from '../../../lib/unlockToken';
 
 /**
  * v5.1 — Lead-gate submission endpoint.
@@ -98,10 +99,15 @@ export async function POST(req: NextRequest) {
   } else if (body?.source === 'manual') {
     source = 'manual';
     firstName = clamp(stringOrNull(body?.first_name), 80);
+    lastName = clamp(stringOrNull(body?.last_name), 80);
     email = clamp(stringOrNull(body?.email), 200);
     const rawPhone = stringOrNull(body?.phone);
 
-    if (!firstName || !email || !rawPhone) {
+    // v5.1.4 — last_name is now REQUIRED for manual submissions.
+    // Previously only first_name was required and leads were arriving
+    // with single-word names like "John". The sales team needs the
+    // full name for outreach.
+    if (!firstName || !lastName || !email || !rawPhone) {
       return NextResponse.json({ ok: false, error: 'missing_fields' }, { status: 400 });
     }
     if (!isLikelyEmail(email)) {
@@ -147,14 +153,18 @@ export async function POST(req: NextRequest) {
   const lang = clamp(stringOrNull(body?.lang), 16);
 
   // If the DB isn't wired up, ack without persistence so the user can
-  // still get past the gate — same pattern as /api/track.
+  // still get past the gate — same pattern as /api/track. We still
+  // issue an unlock token so /api/simulate works in dev/preview.
   if (!isDbConfigured()) {
+    const unlock_token = issueUnlockToken({ leadId: 0, sessionId });
     return NextResponse.json({
       ok: true,
       persisted: false,
       lead_id: 0,
       first_name: firstName,
-      email_hint: maskEmail(email)
+      last_name: lastName,
+      email_hint: maskEmail(email),
+      unlock_token
     });
   }
 
@@ -179,12 +189,15 @@ export async function POST(req: NextRequest) {
       referrer,
       lang
     });
+    const unlock_token = issueUnlockToken({ leadId: id, sessionId });
     return NextResponse.json({
       ok: true,
       persisted: true,
       lead_id: id,
       first_name: firstName,
-      email_hint: maskEmail(email)
+      last_name: lastName,
+      email_hint: maskEmail(email),
+      unlock_token
     });
   } catch (err) {
     console.error('[leads/submit] insert failed:', err);
